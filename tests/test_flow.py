@@ -115,12 +115,14 @@ def test_edit_draft_then_approve_in_panel(client, tg):
     for page in ("/", "/app", "/app/new", "/app/new?source=mic", "/meetings", "/settings", "/employees",
                  f"/meetings/{m.id}"):
         assert client.get(page).status_code == 200
-    client.post(f"/meetings/{m.id}/approve", data=form)
+    client.post(f"/meetings/{m.id}/approve", data=form)  # partial form: other tasks must stay as they were
     with SessionLocal() as s:
         m = s.get(Meeting, m.id)
         assert m.status == "done" and m.title == "Новое название" and len(m.tasks) == 4
         t2 = s.get(Task, t.id)
         assert t2.assignee_id == maria.id and t2.deadline == dt.date(2026, 12, 1) and t2.deadline_source == "manual"
+        ivan_task = [x for x in m.tasks if x.title.startswith("Исправить ошибки")][0]
+        assert ivan_task.assignee_id is not None and ivan_task.deadline is not None
     assert any("Найти подрядчика" in c[1].get("text", "") for c in sent_to(tg, "222"))
 
 

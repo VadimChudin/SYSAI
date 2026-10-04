@@ -228,6 +228,8 @@ def _apply_form(mid: int, form):
         r["summary"] = form.get("summary", r.get("summary", ""))
         m.report, m.title = r, r["title"]
         for t in list(m.tasks):
+            if f"title_{t.id}" not in form:  # task not on the submitted form: leave untouched
+                continue
             if form.get(f"del_{t.id}"):
                 m.tasks.remove(t)
                 continue

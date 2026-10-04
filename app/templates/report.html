@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>{{ r.title or m.title }}</title>
+<style>
+@page { size: A4; margin: 16mm 14mm 18mm 14mm;
+  @bottom-left { content: "{{ s.company_name }} · SYSAI"; font: 8pt "Inter","Noto Sans","DejaVu Sans",sans-serif; color:#94a3b8; }
+  @bottom-right { content: "стр. " counter(page) " из " counter(pages); font: 8pt "Inter","Noto Sans","DejaVu Sans",sans-serif; color:#94a3b8; } }
+:root { --a: {{ s.accent_color or '#d97757' }}; }
+* { box-sizing: border-box; }
+body { font-family: "Inter","Noto Sans","DejaVu Sans",sans-serif; color:#0f172a; font-size: 10pt; line-height: 1.45; margin:0; }
+.hero { background: var(--a); color:#fff; border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
+.hero .co { font-size: 8.5pt; opacity:.9; letter-spacing:.08em; text-transform: uppercase; }
+.pm svg { width: 13px; height: 13px; vertical-align: -2px; }
+.hero h1 { font-size: 18pt; margin: 4px 0 8px; line-height:1.2; }
+.meta { display:flex; gap:18px; font-size: 9pt; opacity:.95; flex-wrap: wrap; }
+.grid { display:flex; gap:10px; margin-bottom: 12px; }
+.kpi { flex:1; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; }
+.kpi b { display:block; font-size: 15pt; color: var(--a); }
+.kpi span { font-size: 8pt; color:#64748b; }
+h2 { font-size: 12pt; margin: 16px 0 6px; padding-bottom:4px; border-bottom: 2px solid var(--a); color:#0f172a; }
+.card { border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; margin-bottom:8px; page-break-inside: avoid; }
+.summary { background:#f8fafc; border-left: 4px solid var(--a); padding:10px 12px; border-radius:6px; }
+table { width:100%; border-collapse: collapse; font-size: 9pt; }
+th { text-align:left; background:#f1f5f9; color:#334155; padding:6px 7px; font-weight:600; }
+td { padding:6px 7px; border-bottom:1px solid #e2e8f0; vertical-align: top; }
+tr { page-break-inside: avoid; }
+.badge { display:inline-block; padding:1px 7px; border-radius:10px; font-size:8pt; font-weight:600; white-space:nowrap; }
+.high { background:#fee2e2; color:#b91c1c; } .medium { background:#fef3c7; color:#92400e; } .low { background:#dcfce7; color:#166534; }
+.warn { color:#b91c1c; font-weight:600; }
+.muted { color:#64748b; font-size: 8.5pt; }
+ul { margin: 4px 0 0 0; padding-left: 16px; } li { margin: 2px 0; }
+.t { color: var(--a); font-weight:600; font-size: 8.5pt; }
+.seg { margin: 0 0 4px; font-size: 8.5pt; } .seg b { color:#334155; }
+.two { display:flex; gap:10px; } .two > div { flex:1; }
+</style></head>
+<body>
+<div class="hero">
+  <div class="co"><span class="pm">{% include "_mark_pdf.html" %}</span> SYSAI · {{ s.company_name }} · протокол совещания</div>
+  <h1>{{ r.title or m.title or 'Совещание' }}</h1>
+  <div class="meta">
+    <span>Дата: {{ (m.meeting_date.strftime('%d.%m.%Y') if m.meeting_date else '') }}</span>
+    <span>Длительность: {{ mmss(m.duration_sec) }}</span>
+    <span>Участников: {{ (r.participants or [])|length }}</span>
+    <span>Сформирован {{ generated }}</span>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="kpi"><b>{{ tasks|length }}</b><span>задач</span></div>
+  <div class="kpi"><b>{{ (r.decisions or [])|length }}</b><span>решений</span></div>
+  <div class="kpi"><b>{{ (r.open_questions or [])|length }}</b><span>открытых вопросов</span></div>
+  <div class="kpi"><b>{{ (r.risks or [])|length }}</b><span>рисков</span></div>
+</div>
+
+{% if r.summary %}<h2>Кратко</h2><div class="summary">{{ r.summary }}</div>{% endif %}
+
+{% if tasks %}
+<h2>Задачи</h2>
+<table>
+  <tr><th style="width:4%">#</th><th style="width:40%">Задача</th><th style="width:20%">Исполнитель</th><th style="width:17%">Срок</th><th style="width:11%">Приоритет</th><th style="width:8%">Время</th></tr>
+  {% for t in tasks %}
+  <tr>
+    <td>{{ loop.index }}</td>
+    <td><b>{{ t.title }}</b>{% if t.description %}<div class="muted">{{ t.description }}</div>{% endif %}
+        {% if t.source_quote %}<div class="muted"><i>«{{ t.source_quote }}»</i></div>{% endif %}</td>
+    <td>{% if t.assignee %}{{ t.assignee.name }}{% if t.assignee.position %}<div class="muted">{{ t.assignee.position }}</div>{% endif %}
+        {% elif t.assignee_name %}{{ t.assignee_name }}<div class="muted">нет в справочнике</div>
+        {% else %}<span class="warn">не назначен</span>{% endif %}</td>
+    <td>{{ fmt(t.deadline) }}{% if t.deadline_quote %}<div class="muted">«{{ t.deadline_quote }}»</div>{% elif t.deadline_source == 'default' %}<div class="muted">по умолчанию</div>{% endif %}</td>
+    <td><span class="badge {{ t.priority }}">{{ priority.get(t.priority, '') }}</span></td>
+    <td><span class="t">{{ t.source_time }}</span></td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if r.decisions %}
+<h2>Решения</h2>
+<div class="card"><ul>{% for d in r.decisions %}<li>{% if d.time %}<span class="t">[{{ d.time }}]</span> {% endif %}{{ d.text if d.text is defined else d }}</li>{% endfor %}</ul></div>
+{% endif %}
+
+{% if r.open_questions or r.risks %}
+<div class="two">
+  {% if r.open_questions %}<div><h2>Открытые вопросы</h2><div class="card"><ul>{% for q in r.open_questions %}<li>{{ q }}</li>{% endfor %}</ul></div></div>{% endif %}
+  {% if r.risks %}<div><h2>Риски</h2><div class="card"><ul>{% for q in r.risks %}<li>{{ q }}</li>{% endfor %}</ul></div></div>{% endif %}
+</div>
+{% endif %}
+
+{% if r.topics %}
+<h2>Ход обсуждения</h2>
+{% for tp in r.topics %}
+<div class="card"><b>{% if tp.time %}<span class="t">[{{ tp.time }}]</span> {% endif %}{{ tp.title }}</b>
+  {% if tp.summary %}<div>{{ tp.summary }}</div>{% endif %}
+  {% if tp.notes %}<ul>{% for n in tp.notes %}<li>{{ n }}</li>{% endfor %}</ul>{% endif %}</div>
+{% endfor %}
+{% endif %}
+
+{% if r.participants %}
+<h2>Участники</h2>
+<table><tr><th>Метка в записи</th><th>Участник</th><th>Роль</th></tr>
+{% for p in r.participants %}<tr><td>{{ p.speaker }}</td><td>{{ p.name }}</td><td>{{ p.role }}</td></tr>{% endfor %}</table>
+{% endif %}
+
+{% if r.notes or r.next_meeting %}
+<h2>Заметки</h2><div class="card"><ul>{% for n in r.notes %}<li>{{ n }}</li>{% endfor %}
+{% if r.next_meeting %}<li><b>Следующая встреча:</b> {{ r.next_meeting }}</li>{% endif %}</ul></div>
+{% endif %}
+
+{% if include_transcript and segments %}
+<h2 style="page-break-before: always">Расшифровка</h2>
+{% for sg in segments %}<p class="seg"><span class="t">[{{ mmss(sg.start) }}]</span> <b>{{ sg.speaker }}:</b> {{ sg.text }}</p>{% endfor %}
+{% endif %}
+</body></html>

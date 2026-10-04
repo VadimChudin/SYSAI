@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% from "_logo.html" import logo %}{% from "_icons.html" import icon %}
+{% block title %}Совещания — SYSAI{% endblock %}
+{% block body %}
+<div class="page-h"><div><h1>Совещания</h1><p>Все записи, протоколы и их статус.</p></div><a class="btn primary" href="/app/new">{{ icon('plus') }} Новое</a></div>
+<div class="card">{% include "_meetings_table.html" %}</div>
+{% endblock %}

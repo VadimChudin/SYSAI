@@ -1,0 +1,13 @@
+{% from "_logo.html" import logo %}<!doctype html>
+<html lang="ru"><head>{% include "_head.html" %}<title>Вход — SYSAI</title></head>
+<body><div class="auth"><div class="auth-box">
+  <a href="/">{{ logo('md', animate=True) }}</a>
+  <h1>С возвращением</h1><p>Войдите в личный кабинет</p>
+  <form method="post" action="/login" class="auth-form">
+    <label class="f">Логин <input name="username" autocomplete="username" required autofocus value="{{ username }}"></label>
+    <label class="f">Пароль <input type="password" name="password" autocomplete="current-password" required></label>
+    {% if error %}<div class="warn small">Неверный логин или пароль</div>{% endif %}
+    <button class="btn primary wide">Войти</button>
+  </form>
+  <p class="small muted" style="margin-top:18px"><a href="/" class="muted">← На главную</a></p>
+</div></div></body></html>

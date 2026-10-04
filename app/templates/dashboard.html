@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% from "_logo.html" import logo %}{% from "_icons.html" import icon %}
+{% block title %}Обзор — SYSAI{% endblock %}
+{% block body %}
+<div class="page-h"><div><h1>Добрый день</h1><p>Протоколы, задачи и рассылки в одном месте.</p></div>
+  <a class="btn primary" href="/app/new">{{ icon('plus') }} Новое совещание</a></div>
+<div class="stats">
+  <div class="stat accent"><b>{{ stats.meetings }}</b><span>совещаний</span></div>
+  <div class="stat"><b>{{ stats.tasks }}</b><span>задач создано</span></div>
+  <div class="stat"><b>{{ stats.pending }}</b><span>ждут проверки</span></div>
+  <div class="stat"><b>{{ stats.employees }}</b><span>сотрудников</span></div>
+</div>
+<div class="grid2">
+  <a class="card" href="/app/new?source=file" style="color:inherit"><h2>{{ icon('upload') }} Загрузить запись</h2><p class="muted" style="margin:0">mp3, m4a, wav, ogg, webm, flac — до {{ config.MAX_UPLOAD_MB }} МБ.</p></a>
+  <a class="card" href="/app/new?source=mic" style="color:inherit"><h2>{{ icon('mic') }} С микрофона</h2>
+    <p class="muted" style="margin:0">Автоподхват {{ 'включён' if settings.auto_ingest else 'выключен' }} · имитация в MVP</p></a>
+</div>
+<div class="card"><div class="row between"><h2>Последние совещания</h2><a href="/meetings" class="small">Все →</a></div>
+  {% include "_meetings_table.html" %}</div>
+{% if not employees_count %}<div class="card note">Начните с <a href="/employees">справочника сотрудников</a> — так SYSAI будет назначать задачи по именам.</div>{% endif %}
+{% endblock %}

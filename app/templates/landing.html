@@ -1,0 +1,47 @@
+{% from "_logo.html" import logo %}<!doctype html>
+<html lang="ru"><head>{% include "_head.html" %}<title>SYSAI — протоколы совещаний и задачи</title>
+<meta name="description" content="SYSAI превращает запись совещания в протокол, задачи и рассылку в Telegram."></head>
+<body><div class="landing">
+  <header class="l-top">
+    {{ logo('md') }}
+    <nav><a href="#how" class="hide-m">Как это работает</a>
+      {% if authed %}<a class="btn sm primary" href="/app">Открыть кабинет</a>{% else %}<a class="btn sm" href="/login">Войти</a>{% endif %}</nav>
+  </header>
+  <section class="hero">
+    <div class="notes">
+      <span class="note-pill"><b>Новое:</b> уточнение сроков у исполнителя прямо в Telegram <span class="tag">MVP</span></span>
+      <span class="note-pill">Скоро — задачи в Bitrix24 и звонки с уточнениями <span class="tag">soon</span></span>
+    </div>
+    {{ logo('xl', animate=True) }}
+    <h1>Каждое совещание —<br>в <em>протокол</em>, задачи и сроки</h1>
+    <p class="lead">Загрузите запись или подключите микрофон. SYSAI расшифрует разговор по голосам, соберёт решения, назначит задачи и разошлёт их нужным людям.</p>
+    <div class="chips-row">
+      <span class="chip-lg"><i></i>Расшифровка по голосам</span><span class="chip-lg"><i></i>Протокол и решения</span>
+      <span class="chip-lg"><i></i>Задачи с исполнителями</span><span class="chip-lg"><i></i>Telegram</span>
+      <span class="chip-lg"><i></i>PDF-отчёт</span><span class="chip-lg soon"><i></i>Bitrix24</span><span class="chip-lg soon"><i></i>Звонки</span>
+    </div>
+    <div class="cta">
+      <a class="btn primary btn-hero" href="{{ '/app' if authed else '/login' }}">{{ 'Открыть кабинет' if authed else 'Войти в кабинет' }}</a>
+      <span class="small muted">Доступ по логину и паролю от администратора</span>
+    </div>
+
+    <div class="demo-card">
+      <div><h4>Запись · 45:12</h4>
+        <div class="wave">{% for i in range(46) %}<span style="--d:{{ i }}"></span>{% endfor %}</div>
+        <p class="line-t"><span class="ts">03:15</span><b>Директор:</b> Иван, ошибки с оплатой закрыть до пятницы.</p>
+        <p class="line-t"><span class="ts">03:22</span><b>Иван:</b> Принято, до пятницы закрою и прогоню регресс.</p>
+        <p class="line-t"><span class="ts">07:40</span><b>Мария:</b> Креативы подготовлю после брифа с дизайнером.</p></div>
+      <div><h4>Задачи → Telegram</h4>
+        <div class="task-row"><span>Исправить ошибки оплаты<br><small>Иван Петров</small></span><span class="pill clay">пт, 09.10</span></div>
+        <div class="task-row"><span>Подготовить креативы<br><small>Мария Смирнова</small></span><span class="pill amber">срок уточняется</span></div>
+        <div class="task-row"><span>Найти нового подрядчика<br><small>не назначен</small></span><span class="pill gray">на проверке</span></div></div>
+    </div>
+
+    <div class="steps" id="how">
+      <div class="step"><div class="n">01</div><h3>Запись</h3><p>Файл через форму или автоподхват с умного микрофона.</p></div>
+      <div class="step"><div class="n">02</div><h3>Протокол</h3><p>Расшифровка по голосам, резюме, решения, задачи, риски — и красивый PDF.</p></div>
+      <div class="step"><div class="n">03</div><h3>Рассылка</h3><p>Черновик на проверку, затем отчёт в чаты и задачи каждому исполнителю.</p></div>
+    </div>
+  </section>
+  <footer class="l-foot"><span>© {{ year }} SYSAI</span><span><a href="/login">Вход</a><a href="https://github.com/VadimChudin/SYSAI">GitHub</a></span></footer>
+</div></body></html>

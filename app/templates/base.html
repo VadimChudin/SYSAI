@@ -1,0 +1,28 @@
+{% from "_logo.html" import logo %}{% from "_icons.html" import icon %}<!doctype html>
+<html lang="ru"><head>{% include "_head.html" %}<title>{% block title %}SYSAI{% endblock %}</title></head>
+<body>
+{% set path = request.url.path %}
+<div class="shell">
+  <aside class="side" id="side">
+    <a href="/app">{{ logo('md') }}</a>
+    <a href="/app/new" class="btn primary new">{{ icon('plus') }} Новое совещание</a>
+    <a class="nav {{ 'on' if path == '/app' }}" href="/app">{{ icon('home') }} Обзор</a>
+    <a class="nav {{ 'on' if path.startswith('/meetings') }}" href="/meetings">{{ icon('list') }} Совещания</a>
+    <a class="nav {{ 'on' if path.startswith('/employees') }}" href="/employees">{{ icon('users') }} Сотрудники</a>
+    <a class="nav {{ 'on' if path.startswith('/settings') }}" href="/settings">{{ icon('gear') }} Настройки</a>
+    <div class="sp"></div>
+    <div class="me"><span class="ava">{{ (request.session.get('user') or 'S')[:2]|upper }}</span><span>{{ request.session.get('user') or 'SYSAI' }}</span>
+      <a href="/logout" class="muted" title="Выйти" style="margin-left:auto">{{ icon('logout') }}</a></div>
+  </aside>
+  <div class="main">
+    <div class="topbar"><a href="/app">{{ logo('sm') }}</a><button class="btn sm ghost" onclick="document.getElementById('side').classList.toggle('open')">{{ icon('menu') }}</button></div>
+    <div class="content">
+      {% if not llm or not tg %}<div class="banner">
+        {% if not llm %}<b>Демо-режим ИИ.</b> Не задан <code>OPENROUTER_API_KEY</code> — расшифровка и отчёт берутся из тестового примера. {% endif %}
+        {% if not tg %}<b>Telegram выключен.</b> Не задан <code>TELEGRAM_BOT_TOKEN</code> — сообщения не отправляются.{% endif %}</div>{% endif %}
+      {% block body %}{% endblock %}
+    </div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body></html>

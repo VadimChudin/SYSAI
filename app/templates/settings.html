@@ -1,0 +1,52 @@
+{% extends "base.html" %}{% from "_ui.html" import toggle, deadline_modes, chat_picker %}{% block title %}Настройки — SYSAI{% endblock %}
+{% block body %}
+<div class="page-h"><div><h1>Настройки</h1><p>Значения по умолчанию для всех совещаний.</p></div></div>
+{% if msg %}<div class="card note">{{ msg }}</div>{% endif %}
+<form method="post" action="/settings">
+<div class="grid2">
+<section class="card">
+  <h2>Обработка</h2>
+  {{ toggle('auto_ingest', s.auto_ingest, 'Автоподхват записей с микрофона', 'MVP: имитация через папку входящих. Выключено — только ручная загрузка.') }}
+  {{ toggle('approval_required', s.approval_required, 'Проверять черновик перед отправкой', 'Выключите, чтобы отчёт и задачи уходили сразу') }}
+  <h3>Кто проверяет черновики</h3>{{ chat_picker('approver_chat_ids', s.approver_chat_ids, chats) }}
+</section>
+<section class="card">
+  <h2>Рассылка</h2>
+  <h3 style="margin-top:0">Полный отчёт</h3>
+  <p class="small muted" style="margin:0">Люди, группы или каналы (в канале бот должен быть администратором).</p>
+  {{ chat_picker('report_chat_ids', s.report_chat_ids, chats) }}
+  {{ toggle('send_tasks_to_assignees', s.send_tasks_to_assignees, 'Писать каждому исполнителю его задачи', 'В личку, если у сотрудника привязан Telegram') }}
+  {{ toggle('include_transcript_in_pdf', s.include_transcript_in_pdf, 'Полная расшифровка в конце PDF') }}
+  <div class="row center" style="margin-top:10px"><button class="btn sm" formaction="/settings/test-telegram">Отправить тестовое сообщение</button><span class="small muted">после сохранения</span></div>
+</section>
+<section class="card">
+  <h2>Сроки задач</h2>{{ deadline_modes(s.deadline_mode) }}
+  <div class="row" style="margin-top:14px">
+    <label class="f sm">По умолчанию, раб. дней <input type="number" min="1" name="default_deadline_days" value="{{ s.default_deadline_days }}"></label>
+    <label class="f sm">Ждать ответ, часов <input type="number" min="1" step="0.5" name="ask_timeout_hours" value="{{ s.ask_timeout_hours }}"></label>
+  </div>
+  <p class="small muted">Названный на совещании срок важнее. Нет ответа исполнителя — ставится срок по умолчанию.</p>
+</section>
+<section class="card">
+  <h2>Распознавание и ИИ · OpenRouter</h2>
+  <div class="stack">
+    <label class="f">Модель расшифровки <input name="transcribe_model" value="{{ s.transcribe_model }}"></label>
+    <label class="f">Модель протокола <input name="report_model" value="{{ s.report_model }}"></label>
+    <label class="f sm">Фрагмент, минут <input type="number" min="5" max="60" name="chunk_minutes" value="{{ s.chunk_minutes }}"></label>
+    <label class="f">Словарь терминов <small class="muted">имена, продукты, английские слова — пока тестовый</small><textarea name="glossary" rows="3">{{ s.glossary }}</textarea></label>
+  </div>
+</section>
+<section class="card">
+  <h2>Оформление отчёта</h2>
+  <div class="row"><label class="f">Компания <input name="company_name" value="{{ s.company_name }}"></label>
+    <label class="f sm">Фирменный цвет <input type="color" name="accent_color" value="{{ s.accent_color }}"></label></div>
+</section>
+<section class="card">
+  <h2>Bitrix24 <span class="pill gray">следующий этап</span></h2>
+  {{ toggle('bitrix_enabled', s.bitrix_enabled, 'Создавать задачи в Bitrix24', 'Вебхук задан' if bitrix_url else 'Нужна переменная BITRIX_WEBHOOK_URL. REST API работает только на платных тарифах.', disabled=not bitrix_url) }}
+  {% if bitrix_url %}<button class="btn sm" formaction="/settings/test-bitrix">Проверить подключение</button>{% endif %}
+</section>
+</div>
+<div class="row sticky center"><button class="btn primary">Сохранить настройки</button></div>
+</form>
+{% endblock %}

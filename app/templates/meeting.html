@@ -1,0 +1,85 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}{{ m.title or 'Совещание' }} — SYSAI{% endblock %}
+{% block body %}
+{% set st = STATUS.get(m.status, (m.status, 'gray')) %}
+<div class="page-h">
+  <div><a href="/meetings" class="small muted">← Совещания</a>
+    <h1>{{ r.title or m.title or m.filename }}</h1>
+    <p>{{ m.meeting_date.strftime('%d.%m.%Y') if m.meeting_date }} · {{ mmss(m.duration_sec) }} ·
+      <span class="pill {{ st[1] }}" id="status-pill" data-status="{{ m.status }}" data-id="{{ m.id }}">{{ st[0] }}</span>
+      <span id="progress" class="small">{{ m.progress }}</span></p></div>
+  <div class="actions">
+    {% if m.report %}<a class="btn" href="/meetings/{{ m.id }}/pdf" target="_blank">PDF</a>{% endif %}
+    {% if m.transcript %}<form method="post" action="/meetings/{{ m.id }}/reanalyze"><button class="btn" title="Пересобрать отчёт из расшифровки">Пересобрать</button></form>{% endif %}
+    <form method="post" action="/meetings/{{ m.id }}/delete" onsubmit="return confirm('Удалить совещание?')"><button class="btn danger">Удалить</button></form>
+  </div>
+</div>
+
+{% if m.status == 'error' %}<div class="card err">Ошибка: {{ m.error }}</div>{% endif %}
+{% if m.status in ('queued','transcribing','analyzing','sending') %}
+<div class="card center"><div class="spinner"></div><p class="soft">{{ m.progress }}… Страница обновится сама.</p></div>
+{% endif %}
+
+{% if m.report %}
+<form method="post" action="/meetings/{{ m.id }}/save">
+<section class="card">
+  <div class="row between"><h2>Протокол</h2>{% if request.query_params.get('saved') %}<span class="pill green">Сохранено</span>{% endif %}</div>
+  <div class="stack">
+    <label class="f">Название <input name="title" value="{{ r.title }}"></label>
+    <label class="f">Кратко <textarea name="summary" rows="5">{{ r.summary }}</textarea></label>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Задачи · {{ m.tasks|length }}</h2>
+  <div class="table-wrap"><table class="edit">
+    <thead><tr><th>Задача</th><th>Исполнитель</th><th>Срок</th><th>Приоритет</th><th>Статус</th><th></th></tr></thead><tbody>
+    {% for t in m.tasks %}
+    <tr>
+      <td><input name="title_{{ t.id }}" value="{{ t.title }}"><textarea name="desc_{{ t.id }}" rows="2" placeholder="Описание">{{ t.description }}</textarea>
+        {% if t.source_quote %}<div class="muted small" style="margin-top:6px"><span class="t">{{ t.source_time }}</span> «{{ t.source_quote }}»</div>{% endif %}</td>
+      <td><select name="assignee_{{ t.id }}"><option value="">— не назначен —</option>
+        {% for e in employees %}<option value="{{ e.id }}" {{ 'selected' if t.assignee_id == e.id }}>{{ e.name }}{% if e.position %} · {{ e.position }}{% endif %}</option>{% endfor %}</select>
+        {% if not t.assignee_id and t.assignee_name %}<div class="warn small">Прозвучало «{{ t.assignee_name }}» — нет в справочнике</div>{% endif %}
+        {% if t.assignee and not t.assignee.telegram_chat_id %}<div class="warn small">Нет Telegram</div>{% endif %}</td>
+      <td><input type="date" name="deadline_{{ t.id }}" value="{{ t.deadline.isoformat() if t.deadline }}">
+        <div class="muted small">{{ {'stated':'назван на встрече','default':'по умолчанию','asked':'от исполнителя','manual':'вручную','none':'без срока'}.get(t.deadline_source) }}{% if t.deadline_quote %}: «{{ t.deadline_quote }}»{% endif %}</div></td>
+      <td><select name="priority_{{ t.id }}">{% for k, v in priority.items() %}<option value="{{ k }}" {{ 'selected' if t.priority == k }}>{{ v }}</option>{% endfor %}</select></td>
+      <td>{% set ts = {'draft':('черновик','gray'),'sent':('отправлена','green'),'awaiting_deadline':('ждём срок','amber'),'no_recipient':('нет получателя','red')}.get(t.status, (t.status,'gray')) %}<span class="pill {{ ts[1] }}">{{ ts[0] }}</span></td>
+      <td><label class="small muted" title="Удалить задачу" style="white-space:nowrap"><input type="checkbox" name="del_{{ t.id }}"> ✕</label></td>
+    </tr>
+    {% endfor %}
+    <tr class="new">
+      <td><input name="new_title" placeholder="+ Добавить задачу"></td>
+      <td><select name="new_assignee"><option value="">— не назначен —</option>{% for e in employees %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}</select></td>
+      <td><input type="date" name="new_deadline"></td>
+      <td><select name="new_priority">{% for k, v in priority.items() %}<option value="{{ k }}" {{ 'selected' if k == 'medium' }}>{{ v }}</option>{% endfor %}</select></td>
+      <td></td><td></td></tr>
+  </tbody></table></div>
+</section>
+<div class="row sticky center">
+  <button class="btn">Сохранить</button>
+  {% if m.status in ('awaiting_approval', 'rejected') %}
+  <button class="btn primary" formaction="/meetings/{{ m.id }}/approve" onclick="return confirm('Сохранить правки и отправить отчёт и задачи?')">Сохранить и отправить</button>
+  {% endif %}
+  {% if m.status == 'awaiting_approval' %}<button class="btn danger" formaction="/meetings/{{ m.id }}/reject">Отклонить</button>{% endif %}
+  {% if m.status == 'done' %}<span class="muted small">Отправлено {{ m.sent_at.strftime('%d.%m.%Y %H:%M') if m.sent_at }}</span>{% endif %}
+</div>
+</form>
+
+<div class="grid2">
+  {% if r.decisions %}<section class="card"><h2>Решения</h2><ul>{% for d in r.decisions %}<li>{% if d.time %}<span class="t">{{ d.time }}</span> {% endif %}{{ d.text if d.text is defined else d }}</li>{% endfor %}</ul></section>{% endif %}
+  {% if r.open_questions or r.risks %}<section class="card">
+    {% if r.open_questions %}<h2>Открытые вопросы</h2><ul>{% for q in r.open_questions %}<li>{{ q }}</li>{% endfor %}</ul>{% endif %}
+    {% if r.risks %}<h2 style="margin-top:16px">Риски</h2><ul>{% for q in r.risks %}<li>{{ q }}</li>{% endfor %}</ul>{% endif %}</section>{% endif %}
+</div>
+{% if r.topics %}<section class="card"><h2>Ход обсуждения</h2>
+  {% for tp in r.topics %}<div class="topic"><b>{% if tp.time %}<span class="t">{{ tp.time }}</span> {% endif %}{{ tp.title }}</b><div class="soft">{{ tp.summary }}</div>
+  {% if tp.notes %}<ul>{% for n in tp.notes %}<li>{{ n }}</li>{% endfor %}</ul>{% endif %}</div>{% endfor %}</section>{% endif %}
+{% endif %}
+
+{% if m.transcript %}
+<details class="card"><summary><b>Расшифровка</b> <span class="muted">· {{ m.transcript|length }} реплик</span></summary>
+  <div class="transcript" style="margin-top:12px">{% for sg in m.transcript %}<p><span class="t">{{ mmss(sg.start) }}</span> <b>{{ sg.speaker }}:</b> {{ sg.text }}</p>{% endfor %}</div>
+</details>
+{% endif %}
+{% endblock %}

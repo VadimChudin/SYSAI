@@ -1,0 +1,20 @@
+{% macro toggle(name, checked, title, hint='', disabled=False) %}
+<label class="toggle"><span class="tx"><b>{{ title }}</b>{% if hint %}<small>{{ hint }}</small>{% endif %}</span>
+  <input type="checkbox" name="{{ name }}" {{ 'checked' if checked }} {{ 'disabled' if disabled }}><span class="sw"></span></label>
+{% endmacro %}
+{% macro deadline_modes(current) %}
+<div class="radio-cards">
+  <label><input type="radio" name="deadline_mode" value="default" {{ 'checked' if current == 'default' }}><b>По умолчанию</b>N рабочих дней, если срок не назван</label>
+  <label><input type="radio" name="deadline_mode" value="ask" {{ 'checked' if current == 'ask' }}><b>Уточнять</b>Бот спросит исполнителя в Telegram</label>
+  <label><input type="radio" name="deadline_mode" value="none" {{ 'checked' if current == 'none' }}><b>Без срока</b>Только названные на встрече</label>
+</div>
+{% endmacro %}
+{% macro chat_picker(name, selected, chats) %}
+  {% if chats %}<div class="chips">{% for c in chats %}
+    <label class="chip"><input type="checkbox" name="{{ name }}" value="{{ c.chat_id }}" {{ 'checked' if c.chat_id in selected }}>
+      {{ {'private':'👤','group':'👥','supergroup':'👥','channel':'📢'}.get(c.kind, '•') }} {{ c.title or c.chat_id }}{% if c.username %} <span class="muted">@{{ c.username }}</span>{% endif %}</label>
+  {% endfor %}</div>
+  {% else %}<p class="muted small">Бот пока не знает чатов: напишите ему /start или добавьте в группу/канал.</p>{% endif %}
+  {% set known = chats|map(attribute='chat_id')|list %}
+  <input name="{{ name }}_extra" placeholder="Или chat_id вручную через запятую, например -1001234567890" value="{{ selected|reject('in', known)|join(', ') }}">
+{% endmacro %}

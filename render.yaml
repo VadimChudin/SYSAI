@@ -1,0 +1,24 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> выберите этот репозиторий.
+services:
+  - type: web
+    name: sysai
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ADMIN_USERNAME
+        value: SYSAI
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_MODE
+        value: webhook
+      - key: TIMEZONE
+        value: Europe/Minsk
+      - key: DATABASE_URL
+        sync: false

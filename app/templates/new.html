@@ -1,0 +1,50 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% from "_ui.html" import toggle, deadline_modes, chat_picker %}
+{% block title %}Новое совещание — SYSAI{% endblock %}
+{% block body %}
+<div class="page-h"><div><h1>Новое совещание</h1><p>Выберите источник записи и параметры обработки.</p></div></div>
+<form method="post" action="/upload" enctype="multipart/form-data" id="upload-form">
+<div class="seg-switch" id="src-switch">
+  <label><input type="radio" name="src" value="file" {{ 'checked' if source != 'mic' }}>{{ icon('upload') }} Загрузить файл</label>
+  <label><input type="radio" name="src" value="mic" {{ 'checked' if source == 'mic' }}>{{ icon('mic') }} С микрофона</label>
+</div>
+<div class="grid2" style="align-items:start">
+  <section class="card" style="margin:0">
+    <div class="pane {{ 'on' if source != 'mic' }}" data-pane="file">
+      <h2>Запись</h2>
+      <label class="drop" id="drop">
+        <input type="file" name="file" accept="audio/*,video/mp4,video/webm,.m4a,.amr,.opus,.oga" id="file" {{ 'required' if source != 'mic' }}>
+        <span class="ic">{{ icon('upload') }}</span>
+        <span id="drop-text"><b>Выберите аудиофайл</b> или перетащите сюда<br><small class="muted">mp3, m4a, wav, ogg, webm, flac · до {{ config.MAX_UPLOAD_MB }} МБ</small></span>
+      </label>
+      <div class="row" style="margin-top:14px">
+        <label class="f">Название <input name="title" placeholder="Определится автоматически"></label>
+        <label class="f sm">Дата <input type="date" name="meeting_date" value="{{ today }}"></label>
+      </div>
+      <div class="progress hidden" id="up-progress" style="margin-top:14px"><div></div></div>
+      <button class="btn primary wide" id="upload-btn" style="margin-top:16px">Загрузить и обработать</button>
+    </div>
+    <div class="pane {{ 'on' if source == 'mic' }}" data-pane="mic">
+      <h2>Умный микрофон</h2>
+      <div class="mic-card"><span class="mic-ic {{ 'live' if s.auto_ingest }}">{{ icon('mic') }}</span>
+        <div><b>SYSAI Mic</b> <span class="pill {{ 'green' if s.auto_ingest else 'gray' }}">{{ 'ожидает записи' if s.auto_ingest else 'выключен' }}</span>
+          <div class="small muted">Имитация в MVP: файлы из <code>{{ config.MIC_INBOX_DIR }}</code> подхватываются автоматически.</div></div></div>
+      <label class="toggle"><span class="tx"><b>Автоматически подхватывать записи</b><small>Новые записи с микрофона обрабатываются сами по общим настройкам.</small></span>
+        <input type="checkbox" id="mic-toggle" {{ 'checked' if s.auto_ingest }}><span class="sw"></span></label>
+      <p class="small muted">Последние записи с микрофона: {% if mic_meetings %}{% for m in mic_meetings %}<a href="/meetings/{{ m.id }}">{{ m.title or m.filename }}</a>{{ ', ' if not loop.last }}{% endfor %}{% else %}пока нет{% endif %}</p>
+      <button class="btn wide" formaction="/demo" formnovalidate name="source" value="microphone">Имитировать запись с микрофона</button>
+    </div>
+  </section>
+
+  <section class="card" style="margin:0">
+    <h2>Параметры этого совещания</h2>
+    {{ toggle('approval_required', s.approval_required, 'Проверить черновик перед отправкой', 'Проверяющие получат PDF и кнопки «Отправить / Отклонить»') }}
+    {{ toggle('send_tasks_to_assignees', s.send_tasks_to_assignees, 'Писать исполнителям их задачи', 'В личку тем, у кого привязан Telegram') }}
+    {{ toggle('include_transcript_in_pdf', s.include_transcript_in_pdf, 'Полная расшифровка в PDF') }}
+    <h3>Сроки, если не названы</h3>{{ deadline_modes(s.deadline_mode) }}
+    <h3>Куда отправить отчёт</h3>{{ chat_picker('report_chat_ids', s.report_chat_ids, chats) }}
+    <p class="small muted" style="margin-bottom:0">Значения по умолчанию меняются в <a href="/settings">настройках</a>.</p>
+    <div class="row" style="margin-top:14px"><button class="btn" formaction="/demo" formnovalidate name="source" value="demo">Демо без аудио</button></div>
+  </section>
+</div>
+</form>
+{% endblock %}

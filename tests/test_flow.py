@@ -132,6 +132,8 @@ def test_pdf_and_telegram_message_limits(client):
         _ = [t.assignee for t in m.tasks]
     pdf = render.report_pdf(m, settings_store.all_settings())
     assert pdf[:4] == b"%PDF" and len(pdf) > 10_000
+    bad = client.post("/upload", files={"file": ("doc.txt", b"abc", "text/plain")})
+    assert bad.status_code == 400 and "Неподдерживаемый формат" in bad.text
     m.report = dict(m.report, summary="очень длинный текст " * 1000)
     assert len(render.summary_message(m, {})) <= 4096
     r = client.get(f"/meetings/{m.id}/pdf")

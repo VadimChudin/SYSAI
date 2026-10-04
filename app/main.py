@@ -502,4 +502,6 @@ async def http_exc(request: Request, exc: HTTPException):
         return RedirectResponse(exc.headers["Location"], 303)
     if request.url.path.startswith("/telegram") or request.headers.get("accept", "").startswith("application/json"):
         return JSONResponse({"detail": exc.detail}, exc.status_code)
-    return page(request, "error.html", code=exc.status_code, detail=exc.detail)
+    resp = page(request, "error.html", code=exc.status_code, detail=exc.detail)
+    resp.status_code = exc.status_code
+    return resp

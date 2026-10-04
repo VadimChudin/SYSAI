@@ -2,6 +2,7 @@
 import datetime as dt
 import hmac
 import logging
+import os
 import pathlib
 import shutil
 import time
@@ -69,7 +70,10 @@ def guard(request: Request):
 
 def page(request: Request, name: str, **ctx):
     return tpl.TemplateResponse(request, name, {"request": request, "llm": config.llm_enabled(),
-                                                "tg": config.telegram_enabled(), **ctx})
+                                                "tg": config.telegram_enabled(), "ephemeral": EPHEMERAL, **ctx})
+
+
+EPHEMERAL = config.DATABASE_URL.startswith("sqlite") and bool(os.getenv("RENDER"))
 
 
 # ----------------------------------------------------------------------------- auth
@@ -330,8 +334,14 @@ def known_chats():
 @app.get("/settings", response_class=HTMLResponse)
 def settings_view(request: Request, msg: str = ""):
     guard(request)
-    return page(request, "settings.html", s=settings_store.all_settings(), chats=known_chats(), msg=msg,
-                bitrix_url=bool(config.BITRIX_WEBHOOK_URL))
+    st = settings_store.all_settings()
+    masked = {k: settings_store.mask(st.get(k)) for k in settings_store.SECRET_KEYS}
+    env = {"openrouter_api_key": bool(config.OPENROUTER_API_KEY), "telegram_bot_token": bool(config.TELEGRAM_BOT_TOKEN),
+           "bitrix_webhook_url": bool(config.BITRIX_WEBHOOK_URL)}
+    for k in settings_store.SECRET_KEYS:
+        st.pop(k, None)  # secrets never go back to the browser, only a mask
+    return page(request, "settings.html", s=st, chats=known_chats(), msg=msg, masked=masked, env=env,
+                bitrix_url=bool(config.bitrix_url()))
 
 
 def _chat_ids(form, name: str) -> list[str]:
@@ -354,7 +364,7 @@ async def settings_save(request: Request):
         "include_transcript_in_pdf": bool(f.get("include_transcript_in_pdf")),
         "deadline_mode": f.get("deadline_mode", "default"),
         "default_deadline_days": max(1, int(f.get("default_deadline_days") or 3)),
-        "ask_timeout_hours": max(1, float(f.get("ask_timeout_hours") or 24)),
+        "ask_timeout_hours": _num(f.get("ask_timeout_hours"), 24),
         "transcribe_model": f.get("transcribe_model", "").strip() or settings_store.DEFAULTS["transcribe_model"],
         "report_model": f.get("report_model", "").strip() or settings_store.DEFAULTS["report_model"],
         "chunk_minutes": max(5, min(60, int(f.get("chunk_minutes") or 30))),
@@ -363,7 +373,41 @@ async def settings_save(request: Request):
         "accent_color": f.get("accent_color", "#2563eb"),
         "bitrix_enabled": bool(f.get("bitrix_enabled")),
     })
-    return RedirectResponse("/settings?msg=Сохранено", 303)
+    old_token = config.telegram_token()
+    secrets_upd = {}
+    for k in settings_store.SECRET_KEYS:
+        v = (f.get(k) or "").strip()
+        if f.get("clear_" + k):
+            secrets_upd[k] = ""
+        elif v:
+            secrets_upd[k] = v
+    if secrets_upd:
+        settings_store.set_many(secrets_upd)
+    msg = "Сохранено"
+    if config.telegram_token() != old_token and config.telegram_enabled() and not config.TESTING:
+        try:
+            msg += ". Telegram подключён" if telegram.set_webhook() else ". Токен сохранён, но адрес сайта не известен"
+        except Exception as e:  # noqa: BLE001
+            msg += f". Telegram: {str(e)[:150]}"
+    return RedirectResponse("/settings?msg=" + msg, 303)
+
+
+def _num(v, default):
+    try:
+        x = max(1.0, float(v))
+    except (TypeError, ValueError):
+        return default
+    return int(x) if x.is_integer() else x
+
+
+@app.post("/settings/test-openrouter")
+def test_openrouter(request: Request):
+    guard(request)
+    from . import llm
+    try:
+        return RedirectResponse("/settings?msg=OpenRouter: " + llm.check_key(), 303)
+    except Exception as e:  # noqa: BLE001
+        return RedirectResponse(f"/settings?msg=OpenRouter: {str(e)[:200]}", 303)
 
 
 @app.post("/settings/test-telegram")
@@ -372,7 +416,13 @@ def test_telegram(request: Request):
     s = settings_store.all_settings()
     chats = list(dict.fromkeys((s["report_chat_ids"] or []) + (s["approver_chat_ids"] or [])))
     if not config.telegram_enabled():
-        return RedirectResponse("/settings?msg=Telegram не настроен: задайте TELEGRAM_BOT_TOKEN", 303)
+        return RedirectResponse("/settings?msg=Telegram не настроен: вставьте токен бота в «Подключения»", 303)
+    try:
+        me = telegram.call("getMe")
+    except Exception as e:  # noqa: BLE001
+        return RedirectResponse(f"/settings?msg=Telegram отклонил токен: {str(e)[:150]}", 303)
+    if not chats:
+        return RedirectResponse(f"/settings?msg=Бот @{me.get('username')} работает. Выберите чаты для отчёта или проверки", 303)
     ok, bad = 0, []
     for c in chats:
         try:
@@ -380,7 +430,7 @@ def test_telegram(request: Request):
             ok += 1
         except Exception as e:  # noqa: BLE001
             bad.append(f"{c}: {e}")
-    return RedirectResponse(f"/settings?msg=Отправлено {ok} из {len(chats)}. " + "; ".join(bad)[:300], 303)
+    return RedirectResponse(f"/settings?msg=Бот @{me.get('username')}: отправлено {ok} из {len(chats)}. " + "; ".join(bad)[:300], 303)
 
 
 @app.post("/settings/test-bitrix")

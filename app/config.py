@@ -39,9 +39,30 @@ WORKERS = int(os.getenv("WORKERS", "2"))
 TESTING = _bool("SYSAI_TESTING")
 
 
+def _panel(key: str) -> str:
+    """Value pasted in the web panel (Settings → Подключения); env variable is the fallback."""
+    try:
+        from . import settings_store
+        return (settings_store.get(key) or "").strip()
+    except Exception:  # database not ready yet
+        return ""
+
+
+def openrouter_key() -> str:
+    return _panel("openrouter_api_key") or OPENROUTER_API_KEY
+
+
+def telegram_token() -> str:
+    return _panel("telegram_bot_token") or TELEGRAM_BOT_TOKEN
+
+
+def bitrix_url() -> str:
+    return (_panel("bitrix_webhook_url") or BITRIX_WEBHOOK_URL).rstrip("/")
+
+
 def llm_enabled() -> bool:
-    return bool(OPENROUTER_API_KEY)
+    return bool(openrouter_key())
 
 
 def telegram_enabled() -> bool:
-    return bool(TELEGRAM_BOT_TOKEN) and TELEGRAM_MODE != "off"
+    return bool(telegram_token()) and TELEGRAM_MODE != "off"

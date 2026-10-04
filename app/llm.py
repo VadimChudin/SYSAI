@@ -14,14 +14,15 @@ class LLMError(RuntimeError):
 
 def chat(model: str, messages: list, json_mode: bool = False, temperature: float = 0.1,
          max_tokens: int | None = None, timeout: float = 600) -> str:
-    if not config.OPENROUTER_API_KEY:
-        raise LLMError("OPENROUTER_API_KEY не задан")
+    key = config.openrouter_key()
+    if not key:
+        raise LLMError("Ключ OpenRouter не задан (Настройки → Подключения)")
     body = {"model": model, "messages": messages, "temperature": temperature}
     if json_mode:
         body["response_format"] = {"type": "json_object"}
     if max_tokens:
         body["max_tokens"] = max_tokens
-    headers = {"Authorization": f"Bearer {config.OPENROUTER_API_KEY}", "X-Title": "SYSAI",
+    headers = {"Authorization": f"Bearer {key}", "X-Title": "SYSAI",
                "HTTP-Referer": config.PUBLIC_URL or "https://github.com/VadimChudin/SYSAI"}
     last = None
     for attempt in range(3):
@@ -60,3 +61,17 @@ def parse_json(text: str):
             except json.JSONDecodeError:
                 continue
     raise LLMError("Модель вернула не JSON: " + text[:300])
+
+
+def check_key() -> str:
+    """Validates the OpenRouter key; returns a short human description."""
+    key = config.openrouter_key()
+    if not key:
+        raise LLMError("Ключ не задан")
+    r = httpx.get(f"{config.OPENROUTER_BASE_URL}/key", headers={"Authorization": f"Bearer {key}"}, timeout=20)
+    if r.status_code != 200:
+        raise LLMError(f"OpenRouter отклонил ключ (HTTP {r.status_code})")
+    d = r.json().get("data", {})
+    usage, limit = d.get("usage"), d.get("limit")
+    return "ключ принят" + (f", израсходовано ${usage:.2f}" if isinstance(usage, (int, float)) else "") + \
+        (f" из ${limit:.2f}" if isinstance(limit, (int, float)) else "")

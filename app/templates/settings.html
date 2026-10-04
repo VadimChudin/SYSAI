@@ -4,6 +4,24 @@
 {% if msg %}<div class="card note">{{ msg }}</div>{% endif %}
 <form method="post" action="/settings">
 <div class="grid2">
+<section class="card" style="grid-column: 1 / -1">
+  <h2>Подключения</h2>
+  <p class="small muted" style="margin-top:-6px">Ключи хранятся на сервере и не показываются после сохранения. Чтобы заменить — вставьте новый.</p>
+  {% if ephemeral %}<div class="banner" style="margin-bottom:14px">Сейчас база временная (бесплатный Render без Postgres): ключи, сотрудники и совещания сбросятся при перезапуске или обновлении сайта. Для постоянного хранения подключите Postgres (<code>DATABASE_URL</code>).</div>{% endif %}
+  <div class="grid2" style="margin:0">
+    {% for key, title, ph, test in [('openrouter_api_key','OpenRouter API key','sk-or-v1-…','/settings/test-openrouter'),
+                                     ('telegram_bot_token','Токен Telegram-бота','123456789:AA… от @BotFather','/settings/test-telegram'),
+                                     ('bitrix_webhook_url','Вебхук Bitrix24 (позже)','https://портал.bitrix24.by/rest/1/xxxx/','')] %}
+    <div class="stack" style="gap:8px">
+      <div class="row between"><b style="font-weight:500">{{ title }}</b>
+        {% if masked[key] %}<span class="pill green">задан {{ masked[key] }}</span>{% elif env[key] %}<span class="pill blue">из окружения</span>{% else %}<span class="pill gray">не задан</span>{% endif %}</div>
+      <input type="password" name="{{ key }}" placeholder="{{ ph }}" autocomplete="off">
+      <div class="row center">{% if test %}<button class="btn sm" formaction="{{ test }}">Проверить</button>{% endif %}
+        {% if masked[key] %}<label class="small muted"><input type="checkbox" name="clear_{{ key }}"> удалить ключ</label>{% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
 <section class="card">
   <h2>Обработка</h2>
   {{ toggle('auto_ingest', s.auto_ingest, 'Автоподхват записей с микрофона', 'MVP: имитация через папку входящих. Выключено — только ручная загрузка.') }}
@@ -17,7 +35,7 @@
   {{ chat_picker('report_chat_ids', s.report_chat_ids, chats) }}
   {{ toggle('send_tasks_to_assignees', s.send_tasks_to_assignees, 'Писать каждому исполнителю его задачи', 'В личку, если у сотрудника привязан Telegram') }}
   {{ toggle('include_transcript_in_pdf', s.include_transcript_in_pdf, 'Полная расшифровка в конце PDF') }}
-  <div class="row center" style="margin-top:10px"><button class="btn sm" formaction="/settings/test-telegram">Отправить тестовое сообщение</button><span class="small muted">после сохранения</span></div>
+  <div class="row center" style="margin-top:10px"><button class="btn sm" formaction="/settings/test-telegram">Отправить тестовое сообщение</button><span class="small muted">сначала сохраните</span></div>
 </section>
 <section class="card">
   <h2>Сроки задач</h2>{{ deadline_modes(s.deadline_mode) }}
@@ -43,7 +61,7 @@
 </section>
 <section class="card">
   <h2>Bitrix24 <span class="pill gray">следующий этап</span></h2>
-  {{ toggle('bitrix_enabled', s.bitrix_enabled, 'Создавать задачи в Bitrix24', 'Вебхук задан' if bitrix_url else 'Нужна переменная BITRIX_WEBHOOK_URL. REST API работает только на платных тарифах.', disabled=not bitrix_url) }}
+  {{ toggle('bitrix_enabled', s.bitrix_enabled, 'Создавать задачи в Bitrix24', 'Вебхук задан' if bitrix_url else 'Сначала вставьте вебхук в «Подключения». REST API работает только на платных тарифах.', disabled=not bitrix_url) }}
   {% if bitrix_url %}<button class="btn sm" formaction="/settings/test-bitrix">Проверить подключение</button>{% endif %}
 </section>
 </div>

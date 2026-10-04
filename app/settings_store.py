@@ -29,8 +29,11 @@ DEFAULTS = {
     # look
     "company_name": "Компания",
     "accent_color": "#d97757",
-    # integrations
+    # integrations (keys pasted in the panel; environment variables are the fallback)
     "bitrix_enabled": False,
+    "openrouter_api_key": "",
+    "telegram_bot_token": "",
+    "bitrix_webhook_url": "",
 }
 
 
@@ -72,3 +75,11 @@ def set_many(values: dict):
             else:
                 s.add(Setting(key=k, value=json.dumps(v, ensure_ascii=False)))
         s.commit()
+
+
+SECRET_KEYS = ("openrouter_api_key", "telegram_bot_token", "bitrix_webhook_url")
+
+
+def mask(v: str) -> str:
+    v = v or ""
+    return "" if not v else ("•" * 8 + v[-4:] if len(v) > 8 else "•" * len(v))

@@ -10,9 +10,10 @@ class BitrixError(RuntimeError):
 
 
 def call(method: str, params: dict) -> dict:
-    if not config.BITRIX_WEBHOOK_URL:
-        raise BitrixError("BITRIX_WEBHOOK_URL не задан")
-    r = httpx.post(f"{config.BITRIX_WEBHOOK_URL}/{method}.json", json=params, timeout=30)
+    url = config.bitrix_url()
+    if not url:
+        raise BitrixError("Вебхук Bitrix24 не задан (Настройки → Подключения)")
+    r = httpx.post(f"{url}/{method}.json", json=params, timeout=30)
     data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     if r.status_code != 200 or "error" in data:
         raise BitrixError(f"{method}: {data.get('error_description') or data.get('error') or r.text[:300]}")

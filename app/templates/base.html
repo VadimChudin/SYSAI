@@ -18,8 +18,8 @@
     <div class="topbar"><a href="/app">{{ logo('sm') }}</a><button class="btn sm ghost" onclick="document.getElementById('side').classList.toggle('open')">{{ icon('menu') }}</button></div>
     <div class="content">
       {% if not llm or not tg %}<div class="banner">
-        {% if not llm %}<b>Демо-режим ИИ.</b> Не задан <code>OPENROUTER_API_KEY</code> — расшифровка и отчёт берутся из тестового примера. {% endif %}
-        {% if not tg %}<b>Telegram выключен.</b> Не задан <code>TELEGRAM_BOT_TOKEN</code> — сообщения не отправляются.{% endif %}</div>{% endif %}
+        {% if not llm %}<b>Демо-режим ИИ.</b> Ключ OpenRouter не задан — расшифровка и отчёт берутся из тестового примера. <a href="/settings">Вставить ключ →</a> {% endif %}
+        {% if not tg %}<b>Telegram выключен.</b> Токен бота не задан — сообщения не отправляются.{% endif %}</div>{% endif %}
       {% block body %}{% endblock %}
     </div>
   </div>

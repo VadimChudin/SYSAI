@@ -16,12 +16,12 @@ class TelegramError(RuntimeError):
 
 
 def _url(method: str) -> str:
-    return f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/{method}"
+    return f"https://api.telegram.org/bot{config.telegram_token()}/{method}"
 
 
 def call(method: str, data: dict | None = None, files: dict | None = None, timeout: float = 60):
-    if not config.TELEGRAM_BOT_TOKEN:
-        raise TelegramError("TELEGRAM_BOT_TOKEN не задан")
+    if not config.telegram_token():
+        raise TelegramError("Токен бота не задан (Настройки → Подключения)")
     if files:
         payload = {k: (json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v))
                    for k, v in (data or {}).items()}

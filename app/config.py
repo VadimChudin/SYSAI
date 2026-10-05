@@ -13,9 +13,16 @@ BASE_DIR = pathlib.Path(__file__).resolve().parent
 DATA_DIR = pathlib.Path(os.getenv("DATA_DIR", BASE_DIR.parent / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'sysai.db'}")
-if DATABASE_URL.startswith("postgres://"):  # Render/Heroku style
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+def database_url(value: str | None, data_dir: pathlib.Path) -> str:
+    url = (value or "").strip() or f"sqlite:///{data_dir / 'sysai.db'}"
+    # Provider URLs omit the installed SQLAlchemy psycopg driver name.
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
+DATABASE_URL = database_url(os.getenv("DATABASE_URL"), DATA_DIR)
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "SYSAI")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "SYSAI")

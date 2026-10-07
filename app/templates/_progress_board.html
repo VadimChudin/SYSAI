@@ -1,0 +1,33 @@
+<section id="progressboard" class="progress-board" data-mid="{{ m.id }}" aria-labelledby="progress-board-title">
+  <div class="progress-board-heading">
+    <div>
+      <p class="progress-board-eyebrow">РАССЫЛКА И ОТВЕТЫ</p>
+      <h2 id="progress-board-title">Ход поручений</h2>
+    </div>
+    <p class="progress-board-connection" data-connection role="status" aria-live="polite">Подключаемся…</p>
+  </div>
+
+  <div class="progress-board-summary" aria-label="Сводка по получателям">
+    <div><strong data-summary="recipients">—</strong><span>получателей</span></div>
+    <div><strong data-summary="delivered">—</strong><span>доставлено</span></div>
+    <div><strong data-summary="responded">—</strong><span>ответили</span></div>
+    <div><strong data-summary="attention">—</strong><span>нужно внимания</span></div>
+  </div>
+
+  <div class="progress-board-flow" data-flow>
+    <svg class="progress-board-connectors" data-connectors aria-hidden="true" focusable="false"></svg>
+    <div class="progress-board-report" data-report-node>
+      <span class="progress-board-report-mark" aria-hidden="true">S</span>
+      <span class="progress-board-report-label">Итоговый отчёт</span>
+      <strong data-report-title>Загружаем данные…</strong>
+      <span class="progress-board-report-status" data-report-status>Состояние рассылки</span>
+    </div>
+    <div class="progress-board-people" data-people aria-label="Получатели отчёта">
+      <article class="progress-board-person progress-board-skeleton" aria-hidden="true"><span></span><span></span><span></span></article>
+      <article class="progress-board-person progress-board-skeleton" aria-hidden="true"><span></span><span></span><span></span></article>
+    </div>
+    <p class="progress-board-empty" data-empty hidden>Получателей пока нет.</p>
+  </div>
+  <div class="progress-board-unassigned" data-unassigned hidden></div>
+</section>
+<script src="/static/progress-board.js" defer></script>

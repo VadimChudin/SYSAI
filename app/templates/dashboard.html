@@ -12,7 +12,7 @@
 <div class="grid2">
   <a class="card" href="/app/new?source=file" style="color:inherit"><h2>{{ icon('upload') }} Загрузить запись</h2><p class="muted" style="margin:0">mp3, m4a, wav, ogg, webm, flac — до {{ config.MAX_UPLOAD_MB }} МБ.</p></a>
   <a class="card" href="/app/new?source=mic" style="color:inherit"><h2>{{ icon('mic') }} С микрофона</h2>
-    <p class="muted" style="margin:0">Автоподхват {{ 'включён' if settings.auto_ingest else 'выключен' }} · имитация в MVP</p></a>
+    <p class="muted" style="margin:0">Настоящая запись в браузере · передача звука на сервер</p></a>
 </div>
 <div class="card"><div class="row between"><h2>Последние совещания</h2><a href="/meetings" class="small">Все →</a></div>
   {% include "_meetings_table.html" %}</div>

@@ -34,16 +34,58 @@
     if (r.ok) location.reload(); else { mic.checked = !mic.checked; alert('Не удалось сохранить'); }
   });
   const pill = document.getElementById('status-pill');
-  if (pill && ['queued', 'transcribing', 'analyzing', 'sending'].includes(pill.dataset.status)) {
+  const dialogues = document.getElementById('employee-dialogues');
+  const board = document.getElementById('progressboard');
+  let editing = false;
+  document.querySelectorAll('form[action$="/save"] input, form[action$="/save"] textarea, form[action$="/save"] select').forEach(el => el.addEventListener('input', () => { editing = true; }));
+  if (pill && !board && (dialogues || ['queued', 'transcribing', 'analyzing', 'sending', 'delivery_queued', 'delivery_retry'].includes(pill.dataset.status))) {
     const tick = async () => {
       try {
         const r = await fetch('/meetings/' + pill.dataset.id + '/status', { headers: { accept: 'application/json' } });
         const j = await r.json();
-        if (j.status !== pill.dataset.status) return location.reload();
+        if (!editing && (j.status !== pill.dataset.status || (dialogues && JSON.stringify(j.dialogue_version) !== JSON.stringify(JSON.parse(dialogues.dataset.version))))) return location.reload();
         document.getElementById('progress').textContent = j.progress;
       } catch (e) { }
       setTimeout(tick, 3000);
     };
     setTimeout(tick, 3000);
   }
+  let boardVersion, refreshing = false;
+  document.addEventListener('sysai:board-update', async event => {
+    if (!pill) return;
+    const meeting = event.detail.meeting;
+    pill.textContent = meeting.label;
+    const colors = { error: 'red', delivery_failed: 'red', done: 'green', ready: 'green', awaiting_approval: 'amber', delivery_retry: 'amber', rejected: 'gray' };
+    pill.className = 'pill ' + (colors[meeting.status] || 'blue');
+    pill.dataset.status = meeting.status;
+    document.getElementById('progress').textContent = meeting.progress;
+    if (boardVersion !== event.detail.version && !refreshing) {
+      refreshing = true;
+      try {
+        const response = await fetch(location.pathname, { headers: { accept: 'text/html' } });
+        if (response.ok) {
+          const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+          ['employee-dialogues', 'delivery-region', 'versions-region', 'meeting-live-status', ...(!editing ? ['report-editor'] : [])].forEach(id => {
+            const current = document.getElementById(id), updated = doc.getElementById(id);
+            if (current && updated && !current.contains(document.activeElement)) {
+              const open = [...current.querySelectorAll('details[open]')].map(el => el.id);
+              current.replaceWith(updated);
+              if (id === 'report-editor') updated.querySelectorAll('input,textarea,select').forEach(el => el.addEventListener('input', () => { editing = true; }));
+              open.forEach(detail => { const el = document.getElementById(detail); if (el) el.open = true; });
+            }
+          });
+          openDialogue();
+        }
+      } catch (_) { }
+      finally { refreshing = false; }
+    }
+    boardVersion = event.detail.version;
+  });
+  function openDialogue() {
+    if (!location.hash.startsWith('#dialogue-')) return;
+    const target = document.getElementById(location.hash.slice(1));
+    if (target?.tagName === 'DETAILS') target.open = true;
+  }
+  window.addEventListener('hashchange', openDialogue);
+  openDialogue();
 })();

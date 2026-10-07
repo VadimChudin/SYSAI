@@ -47,7 +47,8 @@ def test_full_flow_with_approval_and_deadline_questions(client, tg):
     assert not sent_to(tg, "111") and not sent_to(tg, "-100500")
 
     # approver presses "Отправить"
-    upd = {"update_id": 1, "callback_query": {"id": "cb1", "from": {"id": 999}, "data": f"ap:{mid}",
+    callback_data = to_approver[1][1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    upd = {"update_id": 1, "callback_query": {"id": "cb1", "from": {"id": 999}, "data": callback_data,
                                               "message": {"message_id": 2, "chat": {"id": 999, "type": "private"}}}}
     assert client.post("/telegram/webhook", json=upd, headers={"X-Telegram-Bot-Api-Secret-Token": "hook"}).status_code == 200
     with SessionLocal() as s:

@@ -12,7 +12,7 @@
     <div class="pane {{ 'on' if source != 'mic' }}" data-pane="file">
       <h2>Запись</h2>
       <label class="drop" id="drop">
-        <input type="file" name="file" accept="audio/*,video/mp4,video/webm,.m4a,.amr,.opus,.oga" id="file" {{ 'required' if source != 'mic' }}>
+        <input type="file" name="file" accept="{{ audio_ext|join(',') }}" data-max-mb="{{ config.MAX_UPLOAD_MB }}" id="file" aria-describedby="upload-error" {{ 'required' if source != 'mic' }}>
         <span class="ic">{{ icon('upload') }}</span>
         <span id="drop-text"><b>Выберите аудиофайл</b> или перетащите сюда<br><small class="muted">mp3, m4a, wav, ogg, webm, flac · до {{ config.MAX_UPLOAD_MB }} МБ</small></span>
       </label>
@@ -20,6 +20,7 @@
         <label class="f">Название <input name="title" placeholder="Определится автоматически"></label>
         <label class="f sm">Дата <input type="date" name="meeting_date" value="{{ today }}"></label>
       </div>
+      <div class="warn small hidden" id="upload-error" role="alert" tabindex="-1" style="margin-top:14px"></div>
       <div class="progress hidden" id="up-progress" style="margin-top:14px"><div></div></div>
       <button class="btn primary wide" id="upload-btn" style="margin-top:16px">Загрузить и обработать</button>
     </div>

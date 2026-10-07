@@ -5,3 +5,5 @@ data/
 *.db
 .venv/
 .pytest_cache/
+.hoplite/cache/
+.hoplite/artifacts/

@@ -184,7 +184,7 @@ def new_meeting(request: Request, source: str = "file"):
     with SessionLocal() as s:
         mic = s.query(Meeting).filter_by(source="microphone").order_by(Meeting.id.desc()).limit(3).all()
     return page(request, "new.html", s=settings_store.all_settings(), chats=known_chats(), source=source,
-                today=deadlines.today().isoformat(), mic_meetings=mic)
+                today=deadlines.today().isoformat(), mic_meetings=mic, audio_ext=sorted(pipeline.AUDIO_EXT))
 
 
 def _options(form) -> dict:

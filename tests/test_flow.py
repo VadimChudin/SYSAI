@@ -210,3 +210,22 @@ def test_api_keys_pasted_in_panel_are_used_and_masked(client):
     assert config.openrouter_key() == "sk-or-v1-secretvalue1234"
     client.post("/settings", data={"deadline_mode": "ask", "clear_openrouter_api_key": "on", "clear_telegram_bot_token": "on"})
     assert not config.llm_enabled() and not config.telegram_token()
+
+
+def test_upload_validation_contract(client, monkeypatch):
+    from app import config, pipeline
+    page = client.get("/app/new").text
+    assert f'accept="{",".join(sorted(pipeline.AUDIO_EXT))}"' in page
+    assert f'data-max-mb="{config.MAX_UPLOAD_MB}"' in page
+    assert 'id="upload-error" role="alert"' in page
+    headers = {"accept": "application/json"}
+    response = client.post("/upload", files={"file": ("notes.txt", b"notes")}, headers=headers)
+    assert response.status_code == 400
+    assert "Неподдерживаемый формат" in response.json()["detail"]
+    monkeypatch.setattr(config, "MAX_UPLOAD_MB", 0)
+    response = client.post("/upload", files={"file": ("meeting.mp3", b"audio")}, headers=headers)
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Файл больше 0 МБ"
+    assert not list((config.DATA_DIR / "uploads").iterdir())
+    with SessionLocal() as s:
+        assert s.query(Meeting).count() == 0

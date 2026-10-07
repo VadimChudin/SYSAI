@@ -76,6 +76,25 @@ class Meeting(Base):
     checkpoints = relationship("ProcessingCheckpoint", cascade="all, delete-orphan")
     dialogue = relationship("ConversationMessage", cascade="all, delete-orphan", order_by="ConversationMessage.id")
     escalations = relationship("ConversationEscalation", cascade="all, delete-orphan", order_by="ConversationEscalation.id")
+    report_versions = relationship("ReportVersion", cascade="all, delete-orphan", order_by="ReportVersion.version")
+
+
+class ReportVersion(Base):
+    __tablename__ = "report_versions"
+    __table_args__ = (UniqueConstraint("meeting_id", "version"),)
+    id = Column(Integer, primary_key=True)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    title = Column(String(300), nullable=False)
+    filename = Column(String(300), nullable=False)
+    pdf = Column(LargeBinary, nullable=False)
+    snapshot = Column(JSON, nullable=False)
+    origin = Column(String(30), nullable=False, default="approval")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=now)
+
+    @property
+    def size_bytes(self):
+        return len(self.pdf)
 
 
 class Recording(Base):

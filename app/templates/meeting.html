@@ -8,7 +8,7 @@
       <span class="pill {{ st[1] }}" id="status-pill" data-status="{{ m.status }}" data-id="{{ m.id }}">{{ st[0] }}</span>
       <span id="progress" class="small">{{ m.progress }}</span></p></div>
   <div class="actions">
-    {% if m.report %}<a class="btn" href="/meetings/{{ m.id }}/pdf" target="_blank">PDF</a>{% endif %}
+    {% if m.report %}<a class="btn" href="/meetings/{{ m.id }}/pdf" target="_blank">PDF</a><a class="btn" href="/meetings/{{ m.id }}/pdf?download=1">Скачать PDF</a>{% endif %}
     {% if m.transcript and m.status in ('awaiting_approval','rejected','error') %}<form method="post" action="/meetings/{{ m.id }}/reanalyze"><button class="btn" title="Пересобрать отчёт из расшифровки">Пересобрать</button></form>{% endif %}
     <form method="post" action="/meetings/{{ m.id }}/delete" onsubmit="return confirm('Удалить совещание?')"><button class="btn danger">Удалить</button></form>
   </div>
@@ -68,6 +68,17 @@
 {% endif %}
 
 {% if m.report %}
+{% if m.report_versions %}<section class="card" id="report-versions">
+  <h2>Сохранённые версии отчёта</h2>
+  <p class="small muted">Это неизменяемые документы. Новые сроки в переписке и изменения оформления не меняют утверждённый PDF.</p>
+  {% for version in m.report_versions %}<div class="row between" style="margin-top:12px">
+    <div><b>{{ version.filename }}</b> <span class="pill green">v{{ version.version }}</span>
+      <div class="small muted">{{ version.created_at.strftime('%d.%m.%Y %H:%M') }} · {{ (version.size_bytes / 1024)|round(1) }} КБ
+        {% if version.origin == 'legacy' %}· сохранено из прежнего отчёта, исходная версия отправки неизвестна{% elif version.origin == 'delivery_recovery' %}· PDF восстановлен из журнала рассылки{% else %}· сохранено при утверждении{% endif %}</div></div>
+    <div class="actions"><a class="btn sm" href="/meetings/{{ m.id }}/reports/{{ version.id }}/pdf" target="_blank">Открыть</a>
+      <a class="btn sm" href="/meetings/{{ m.id }}/reports/{{ version.id }}/pdf?download=1">Скачать</a></div>
+  </div>{% endfor %}
+</section>{% endif %}
 {% set dialogue_version = [] %}
 {% for x in m.dialogue %}{% set _ = dialogue_version.append([x.id,x.status]) %}{% endfor %}
 {% for x in m.escalations %}{% set _ = dialogue_version.append([x.id,x.status]) %}{% endfor %}

@@ -8,6 +8,7 @@ import secrets
 import shutil
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -15,10 +16,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bitrix, config, deadlines, pipeline, render, settings_store, telegram
+from . import bitrix, config, deadlines, pipeline, render, report_archive, settings_store, telegram
 from .analyze import mmss
 from .ui_icons import ICONS
-from .db import ConversationEscalation, Delivery, Employee, Meeting, SessionLocal, Task, TelegramChat, init_db, now
+from .db import ConversationEscalation, Delivery, Employee, Meeting, ReportVersion, SessionLocal, Task, TelegramChat, init_db, now
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sysai")
@@ -135,10 +136,46 @@ def dashboard(request: Request):
 
 
 @app.get("/meetings", response_class=HTMLResponse)
-def meetings_list(request: Request):
+def meetings_list(request: Request, q: str = "", status: str = "", source: str = "", date_from: str = "", date_to: str = "", p: int = 1):
     guard(request)
-    meetings, counts = _meetings()
-    return page(request, "meetings.html", meetings=meetings, counts=counts)
+    q = q.strip()[:200]
+    if status and status not in STATUS:
+        raise HTTPException(400, "Некорректный статус")
+    if source and source not in ("web", "microphone", "demo", "api"):
+        raise HTTPException(400, "Некорректный источник")
+    try:
+        first = dt.date.fromisoformat(date_from) if date_from else None
+        last = dt.date.fromisoformat(date_to) if date_to else None
+    except ValueError:
+        raise HTTPException(400, "Некорректная дата фильтра") from None
+    if first and last and first > last:
+        raise HTTPException(400, "Начальная дата не должна быть позже конечной")
+    with SessionLocal() as s:
+        query = s.query(Meeting)
+        if q:
+            # Python casefold keeps Cyrillic search consistent across SQLite and PostgreSQL.
+            matches = [mid for mid, title, filename in s.query(Meeting.id, Meeting.title, Meeting.filename)
+                       if q.casefold() in (title or "").casefold() or q.casefold() in (filename or "").casefold()]
+            query = query.filter(Meeting.id.in_(matches))
+        if status:
+            query = query.filter(Meeting.status == status)
+        if source:
+            query = query.filter(Meeting.source == source)
+        if first:
+            query = query.filter(Meeting.meeting_date >= first)
+        if last:
+            query = query.filter(Meeting.meeting_date <= last)
+        total = query.count()
+        pages = max(1, (total + 23) // 24)
+        number = max(1, min(p, pages))
+        meetings = query.order_by(Meeting.id.desc()).offset((number - 1) * 24).limit(24).all()
+        counts = {m.id: len(m.tasks) for m in meetings}
+        versions = {m.id: report_archive.latest(s, m.id) for m in meetings}
+    filters = dict(q=q, status=status, source=source, date_from=date_from, date_to=date_to)
+    link = lambda n: "/meetings?" + urlencode(dict(filters, p=n))
+    return page(request, "meetings.html", meetings=meetings, counts=counts, versions=versions, **filters,
+                page_number=number, total_pages=pages, total_count=total, archive_error="",
+                prev_url=link(number - 1) if number > 1 else None, next_url=link(number + 1) if number < pages else None)
 
 
 @app.get("/app/new", response_class=HTMLResponse)
@@ -315,6 +352,9 @@ def _apply_form(mid: int, form, approve=False):
             {Delivery.status: "cancelled"}, synchronize_session=False)
         if not approve:
             m.options = dict(m.options or {}, approval_revision=int((m.options or {}).get("approval_revision", 1)) + 1)
+        else:
+            s.flush()
+            report_archive.ensure(s, m, settings_store.for_meeting(m.options))
         s.commit()
         return True
 
@@ -464,14 +504,40 @@ def meeting_delete(request: Request, mid: int):
 
 
 @app.get("/meetings/{mid}/pdf")
-def meeting_pdf(request: Request, mid: int):
+def meeting_pdf(request: Request, mid: int, download: bool = False):
     guard(request)
     with SessionLocal() as s:
+        if not s.get(Meeting, mid):
+            raise HTTPException(404, "Совещание не найдено")
         m = pipeline.load(s, mid)
-    pdf = render.report_pdf(m, settings_store.for_meeting(m.options))
-    from urllib.parse import quote
-    return Response(pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(render.pdf_name(m))}"})
+        if not m.report:
+            raise HTTPException(409, "Отчёт ещё не готов")
+        archived = report_archive.latest(s, mid)
+        if not archived and m.status in report_archive.APPROVED_STATUSES:
+            s.query(Meeting).filter_by(id=mid).update({Meeting.progress: Meeting.progress}, synchronize_session=False)
+            archived = report_archive.ensure(s, m, settings_store.for_meeting(m.options), origin="legacy")
+            s.commit()
+        pdf = archived.pdf if archived else render.report_pdf(m, settings_store.for_meeting(m.options))
+        filename = archived.filename if archived else render.pdf_name(m)
+    return pdf_response(pdf, filename, download)
+
+
+def pdf_response(pdf, filename, download=False):
+    disposition = "attachment" if download else "inline"
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(filename)}",
+        "Cache-Control": "private, no-store",
+    })
+
+
+@app.get("/meetings/{mid}/reports/{version_id}/pdf")
+def archived_pdf(request: Request, mid: int, version_id: int, download: bool = False):
+    guard(request)
+    with SessionLocal() as s:
+        version = s.query(ReportVersion).filter_by(id=version_id, meeting_id=mid).first()
+        if not version:
+            raise HTTPException(404, "Версия отчёта не найдена")
+        return pdf_response(version.pdf, version.filename, download)
 
 
 # ----------------------------------------------------------------------------- settings

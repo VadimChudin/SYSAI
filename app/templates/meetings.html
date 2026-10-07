@@ -1,6 +1,101 @@
-{% extends "base.html" %}{% from "_logo.html" import logo %}{% from "_icons.html" import icon %}
-{% block title %}Совещания — SYSAI{% endblock %}
+{% extends "base.html" %}{% from "_icons.html" import icon %}
+{% block title %}Архив совещаний — SYSAI{% endblock %}
 {% block body %}
-<div class="page-h"><div><h1>Совещания</h1><p>Все записи, протоколы и их статус.</p></div><a class="btn primary" href="/app/new">{{ icon('plus') }} Новое</a></div>
-<div class="card">{% include "_meetings_table.html" %}</div>
+<div class="page-h archive-heading">
+  <div><h1>Архив совещаний</h1><p>Записи, протоколы и документы в одном месте.</p></div>
+  <a class="btn primary" href="/app/new">{{ icon('plus') }} Новое совещание</a>
+</div>
+
+<form class="archive-filters" method="get" action="/meetings" role="search" aria-label="Фильтры архива совещаний">
+  <label class="f archive-query">Поиск<input type="search" name="q" value="{{ q }}" placeholder="Название или имя файла" autocomplete="off"></label>
+  <label class="f">Статус
+    <select name="status">
+      <option value="">Все статусы</option>
+      {% for key, label in [('queued', 'В очереди'), ('transcribing', 'Расшифровка'), ('analyzing', 'Анализ'), ('awaiting_approval', 'Ждёт проверки'), ('sending', 'Отправка'), ('done', 'Отправлено'), ('rejected', 'Отклонено'), ('delivery_queued', 'В очереди отправки'), ('delivery_retry', 'Повтор доставки'), ('delivery_failed', 'Ошибка доставки'), ('ready', 'Отчёт готов'), ('error', 'Ошибка')] %}
+      <option value="{{ key }}" {{ 'selected' if status == key }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="f">Источник
+    <select name="source">
+      <option value="">Все источники</option>
+      <option value="web" {{ 'selected' if source == 'web' }}>Файл</option>
+      <option value="microphone" {{ 'selected' if source == 'microphone' }}>Микрофон</option>
+      <option value="demo" {{ 'selected' if source == 'demo' }}>Демо</option>
+      <option value="api" {{ 'selected' if source == 'api' }}>API</option>
+    </select>
+  </label>
+  <label class="f archive-date">С даты<input type="date" name="date_from" value="{{ date_from }}"></label>
+  <label class="f archive-date">По дату<input type="date" name="date_to" value="{{ date_to }}"></label>
+  <div class="archive-filter-actions">
+    <button class="btn primary" type="submit">Показать</button>
+    {% if q or status or source or date_from or date_to %}<a class="btn ghost" href="/meetings">Сбросить</a>{% endif %}
+  </div>
+</form>
+
+{% if archive_error %}
+<div class="card err archive-message" role="alert">{{ archive_error }}</div>
+{% elif not meetings and (q or status or source or date_from or date_to) %}
+<div class="card archive-empty"><div class="archive-empty-icon" aria-hidden="true">⌕</div><h2>Ничего не найдено</h2><p>Измените условия поиска или сбросьте фильтры.</p><a class="btn ghost" href="/meetings">Сбросить фильтры</a></div>
+{% elif not meetings %}
+<div class="card archive-empty"><div class="archive-empty-icon" aria-hidden="true">—</div><h2>Архив пока пуст</h2><p>Загрузите запись, чтобы здесь появились совещания и протоколы.</p><a class="btn primary" href="/app/new">{{ icon('plus') }} Добавить совещание</a></div>
+{% else %}
+<div class="archive-results" aria-live="polite">
+  <p class="archive-count">Найдено: <b>{{ total_count }}</b></p>
+  <div class="archive-grid">
+    {% for m in meetings %}
+    {% set st = STATUS.get(m.status, (m.status, 'gray')) %}
+    {% set version = versions.get(m.id) %}
+    <article class="archive-card">
+      <div class="archive-card-top">
+        <a class="archive-card-title" href="/meetings/{{ m.id }}">{{ m.title or m.filename or 'Совещание' }}</a>
+        <span class="pill {{ st[1] }}">{{ st[0] }}</span>
+      </div>
+      <div class="archive-file">
+        <span class="archive-file-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 2.75h8l4 4V21.25H6z"/><path d="M14 2.75v4h4M9 12h6M9 16h6"/></svg></span>
+        <div class="archive-file-info">
+          <span class="archive-file-name" title="{{ m.filename or m.title }}">{{ m.filename or m.title or 'Аудиозапись' }}</span>
+          <span class="muted small">{{ m.meeting_date.strftime('%d.%m.%Y') if m.meeting_date else (m.created_at.strftime('%d.%m.%Y') if m.created_at else 'Дата не указана') }}</span>
+        </div>
+      </div>
+      <div class="archive-meta">
+        <span>{{ counts[m.id] }} {{ 'задач' if counts[m.id] % 10 in (0, 5, 6, 7, 8, 9) or counts[m.id] % 100 in (11, 12, 13, 14) else ('задача' if counts[m.id] % 10 == 1 else 'задачи') }}</span>
+        <span>{{ {'web':'Файл', 'microphone':'Микрофон', 'demo':'Демо', 'api':'API'}.get(m.source, m.source) }}</span>
+      </div>
+      <div class="archive-document">
+        {% if version %}
+        <div class="archive-version">
+          <b>{{ {'legacy':'Сохранено из прежнего отчёта', 'delivery_recovery':'Восстановлено из рассылки'}.get(version.origin, 'Утверждённый PDF') }}</b>
+          <span class="muted small">{{ version.filename }} · {{ '%.1f'|format(version.size_bytes / 1024) }} КБ</span>
+        </div>
+        <div class="actions archive-document-actions">
+          <a class="btn sm" href="/meetings/{{ m.id }}/reports/{{ version.id }}/pdf" target="_blank" rel="noopener">Открыть PDF</a>
+          <a class="btn sm ghost" href="/meetings/{{ m.id }}/reports/{{ version.id }}/pdf?download=1">Скачать</a>
+        </div>
+        {% elif m.report and m.status in ('awaiting_approval', 'rejected', 'analyzing', 'error') %}
+        <div class="archive-draft"><b>Черновик</b><span class="muted small">PDF формируется при открытии</span></div>
+        <a class="btn sm" href="/meetings/{{ m.id }}/pdf" target="_blank" rel="noopener">Открыть PDF</a>
+        {% elif m.report %}
+        <div class="archive-legacy"><b>Прежний отчёт</b><span class="muted small">Версия сохранится при открытии</span></div>
+        <div class="actions archive-document-actions">
+          <a class="btn sm" href="/meetings/{{ m.id }}/pdf" target="_blank" rel="noopener">Открыть PDF</a>
+          <a class="btn sm ghost" href="/meetings/{{ m.id }}/pdf?download=1">Скачать</a>
+        </div>
+        {% else %}
+        <div class="archive-no-pdf"><span class="muted small">PDF пока недоступен</span></div>
+        {% endif %}
+      </div>
+      <a class="archive-detail" href="/meetings/{{ m.id }}">Открыть совещание <span aria-hidden="true">→</span></a>
+    </article>
+    {% endfor %}
+  </div>
+  {% if total_pages > 1 %}
+  <nav class="archive-pagination" aria-label="Страницы архива">
+    {% if prev_url %}<a class="btn sm" href="{{ prev_url }}" rel="prev">← Назад</a>{% else %}<span class="btn sm" aria-disabled="true">← Назад</span>{% endif %}
+    <span class="archive-page-number">Страница {{ page_number }} из {{ total_pages }}</span>
+    {% if next_url %}<a class="btn sm" href="{{ next_url }}" rel="next">Дальше →</a>{% else %}<span class="btn sm" aria-disabled="true">Дальше →</span>{% endif %}
+  </nav>
+  {% endif %}
+</div>
+{% endif %}
 {% endblock %}

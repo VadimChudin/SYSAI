@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import func
 
-from . import analyze, bitrix, checkpoints, config, deadlines, delivery, llm, render, settings_store, telegram, transcribe
+from . import analyze, bitrix, checkpoints, config, deadlines, delivery, llm, render, report_archive, settings_store, telegram, transcribe
 from .db import DeadlineRequest, Delivery, Employee, Meeting, SessionLocal, Task, TelegramChat, now
 
 log = logging.getLogger("sysai.pipeline")
@@ -32,6 +32,7 @@ def load(s, meeting_id: int) -> Meeting:
     _ = list(m.checkpoints)
     _ = list(m.dialogue)
     _ = list(m.escalations)
+    _ = list(m.report_versions)
     return m
 
 
@@ -159,7 +160,8 @@ def request_approval(meeting_id: int):
                     {"text": "❌ Отклонить", "callback_data": f"rj:{meeting_id}:{revision}"}]]
         if config.PUBLIC_URL:
             buttons.append([{"text": "✏️ Править в панели", "url": f"{config.PUBLIC_URL}/meetings/{meeting_id}"}])
-        m.options = dict(m.options or {}, approver_chat_ids=approvers, approval_revision=revision)
+        m.options = dict(m.options or {}, approver_chat_ids=approvers, approval_revision=revision,
+                         approval_formatting={key: settings.get(key) for key in ("company_name", "accent_color", "include_transcript_in_pdf")})
         m.status, m.progress = "awaiting_approval", "Ожидает проверки"
         if not approvers:
             m.progress = "Ожидает проверки в панели (проверяющие в Telegram не выбраны)"
@@ -207,9 +209,10 @@ def deliver(meeting_id: int):
 
 
 def _plan_delivery(m, settings):
-    pdf = render.report_pdf(m, settings) if settings.get("report_chat_ids") else None
     with SessionLocal() as s:
         meeting = load(s, m.id)
+        archived = report_archive.ensure(s, meeting, settings)
+        pdf = archived.pdf
         for chat in settings.get("report_chat_ids") or []:
             delivery.enqueue(s, m.id, "final", "summary", chat, {"text": render.summary_message(m, settings)})
             delivery.enqueue(s, m.id, "final", "pdf", chat,
@@ -428,6 +431,8 @@ def submit_deliver(meeting_id: int, allowed=("awaiting_approval", "rejected"), r
         changed = query.update(
             values, synchronize_session=False)
         if changed:
+            m = load(s, meeting_id)
+            report_archive.ensure(s, m, settings_store.for_meeting(m.options), draft_revision=revision)
             s.query(Delivery).filter_by(meeting_id=meeting_id, phase="draft", status="pending").update(
                 {Delivery.status: "cancelled"}, synchronize_session=False)
         s.commit()

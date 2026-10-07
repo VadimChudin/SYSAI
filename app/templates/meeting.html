@@ -9,18 +9,44 @@
       <span id="progress" class="small">{{ m.progress }}</span></p></div>
   <div class="actions">
     {% if m.report %}<a class="btn" href="/meetings/{{ m.id }}/pdf" target="_blank">PDF</a>{% endif %}
-    {% if m.transcript %}<form method="post" action="/meetings/{{ m.id }}/reanalyze"><button class="btn" title="Пересобрать отчёт из расшифровки">Пересобрать</button></form>{% endif %}
+    {% if m.transcript and m.status in ('awaiting_approval','rejected','error') %}<form method="post" action="/meetings/{{ m.id }}/reanalyze"><button class="btn" title="Пересобрать отчёт из расшифровки">Пересобрать</button></form>{% endif %}
     <form method="post" action="/meetings/{{ m.id }}/delete" onsubmit="return confirm('Удалить совещание?')"><button class="btn danger">Удалить</button></form>
   </div>
 </div>
 
-{% if m.status == 'error' %}<div class="card err">Ошибка: {{ m.error }}</div>{% endif %}
-{% if m.status in ('queued','transcribing','analyzing','sending') %}
+{% if m.status in ('error','delivery_failed') %}<div class="card err">Ошибка: {{ m.error }}</div>{% endif %}
+{% if m.status in ('queued','transcribing','analyzing','sending','delivery_queued','delivery_retry') %}
 <div class="card center"><div class="spinner"></div><p class="soft">{{ m.progress }}… Страница обновится сама.</p></div>
+{% endif %}
+
+{% if m.deliveries %}
+<section class="card" id="delivery-journal">
+  <div class="row between"><h2>Журнал доставки</h2>
+  {% if m.status in ('delivery_failed','delivery_retry','awaiting_approval') %}
+    <form method="post" action="/meetings/{{ m.id }}/retry-delivery"><button class="btn">Повторить неудачные отправки</button></form>
+  {% endif %}</div>
+  <p class="muted small">«Доставлено» означает подтверждение Telegram, а не прочтение сотрудником. Подтверждённые отправки не повторяются.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Получатель</th><th>Документ / сообщение</th><th>Статус</th><th>Попытки</th><th>Результат</th></tr></thead>
+    <tbody>{% for d in m.deliveries %}
+      {% set ds = {'pending':('В очереди','amber'),'sending':('Отправляется','blue'),'sent':('Доставлено','green'),'failed':('Не доставлено','red'),'uncertain':('Требует проверки','amber'),'cancelled':('Отменено','gray')}.get(d.status,(d.status,'gray')) %}
+      <tr><td>{{ d.chat_id }}</td>
+        <td>{{ 'Черновик · ' if d.phase == 'draft' }}{{ {'summary':'Краткий отчёт','pdf':'PDF','tasks':'Задачи','deadline':'Уточнение срока','orphan':'Задачи без исполнителя'}.get(d.kind,d.kind) }}</td>
+        <td><span class="pill {{ ds[1] }}">{{ ds[0] }}</span></td><td>{{ d.attempts }}</td>
+        <td>{% if d.status == 'sent' %}{{ d.sent_at.strftime('%d.%m %H:%M') if d.sent_at }} · сообщение {{ d.message_id }}{% else %}{{ d.error }}{% endif %}
+          {% if d.status == 'uncertain' and m.status in ('delivery_failed','awaiting_approval') %}
+          <form method="post" action="/meetings/{{ m.id }}/deliveries/{{ d.id }}/resend" onsubmit="return confirm('Сначала проверьте Telegram-чат. Сообщение могло быть доставлено. Повторить с риском дубля?')">
+            <button class="btn" name="confirm" value="yes">Повторить с риском дубля</button>
+          </form>{% endif %}
+        </td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
 {% endif %}
 
 {% if m.report %}
 <form method="post" action="/meetings/{{ m.id }}/save">
+<fieldset {{ 'disabled' if m.status not in ('awaiting_approval','rejected') }} style="border:0;padding:0;margin:0;min-width:0">
 <section class="card">
   <div class="row between"><h2>Протокол</h2>{% if request.query_params.get('saved') %}<span class="pill green">Сохранено</span>{% endif %}</div>
   <div class="stack">
@@ -44,7 +70,7 @@
       <td><input type="date" name="deadline_{{ t.id }}" value="{{ t.deadline.isoformat() if t.deadline }}">
         <div class="muted small">{{ {'stated':'назван на встрече','default':'по умолчанию','asked':'от исполнителя','manual':'вручную','none':'без срока'}.get(t.deadline_source) }}{% if t.deadline_quote %}: «{{ t.deadline_quote }}»{% endif %}</div></td>
       <td><select name="priority_{{ t.id }}">{% for k, v in priority.items() %}<option value="{{ k }}" {{ 'selected' if t.priority == k }}>{{ v }}</option>{% endfor %}</select></td>
-      <td>{% set ts = {'draft':('черновик','gray'),'sent':('отправлена','green'),'awaiting_deadline':('ждём срок','amber'),'no_recipient':('нет получателя','red')}.get(t.status, (t.status,'gray')) %}<span class="pill {{ ts[1] }}">{{ ts[0] }}</span></td>
+      <td>{% set ts = {'draft':('черновик','gray'),'sent':('отправлена','green'),'awaiting_deadline':('ждём срок','amber'),'no_recipient':('нет получателя','red'),'delivery_failed':('не доставлено','red')}.get(t.status, (t.status,'gray')) %}<span class="pill {{ ts[1] }}">{{ ts[0] }}</span></td>
       <td><label class="small muted" title="Удалить задачу" style="white-space:nowrap"><input type="checkbox" name="del_{{ t.id }}"> ✕</label></td>
     </tr>
     {% endfor %}
@@ -64,6 +90,7 @@
   {% if m.status == 'awaiting_approval' %}<button class="btn danger" formaction="/meetings/{{ m.id }}/reject">Отклонить</button>{% endif %}
   {% if m.status == 'done' %}<span class="muted small">Отправлено {{ m.sent_at.strftime('%d.%m.%Y %H:%M') if m.sent_at }}</span>{% endif %}
 </div>
+</fieldset>
 </form>
 
 <div class="grid2">

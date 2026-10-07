@@ -34,7 +34,7 @@
     if (r.ok) location.reload(); else { mic.checked = !mic.checked; alert('Не удалось сохранить'); }
   });
   const pill = document.getElementById('status-pill');
-  if (pill && ['queued', 'transcribing', 'analyzing', 'sending'].includes(pill.dataset.status)) {
+  if (pill && ['queued', 'transcribing', 'analyzing', 'sending', 'delivery_queued', 'delivery_retry'].includes(pill.dataset.status)) {
     const tick = async () => {
       try {
         const r = await fetch('/meetings/' + pill.dataset.id + '/status', { headers: { accept: 'application/json' } });

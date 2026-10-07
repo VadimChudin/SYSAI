@@ -51,7 +51,7 @@ def all_settings() -> dict:
     return out
 
 
-MEETING_OPTIONS = ("approval_required", "deadline_mode", "report_chat_ids", "send_tasks_to_assignees",
+MEETING_OPTIONS = ("approval_required", "approver_chat_ids", "deadline_mode", "report_chat_ids", "send_tasks_to_assignees",
                    "include_transcript_in_pdf")
 
 

@@ -17,7 +17,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import bitrix, config, deadlines, pipeline, render, settings_store, telegram
 from .analyze import mmss
 from .ui_icons import ICONS
-from .db import Employee, Meeting, SessionLocal, Task, TelegramChat, init_db
+from .db import Delivery, Employee, Meeting, SessionLocal, Task, TelegramChat, init_db, now
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sysai")
@@ -39,6 +39,8 @@ tpl.env.globals.update(mmss=mmss, fmt=deadlines.fmt, priority=render.PRIORITY, c
 STATUS = {"queued": ("В очереди", "gray"), "transcribing": ("Расшифровка", "blue"), "analyzing": ("Анализ", "blue"),
           "awaiting_approval": ("Ждёт проверки", "amber"), "sending": ("Отправка", "blue"), "done": ("Отправлено", "green"),
           "error": ("Ошибка", "red"), "rejected": ("Отклонено", "gray")}
+STATUS.update(delivery_queued=("В очереди отправки", "blue"), delivery_retry=("Повтор доставки", "amber"),
+              delivery_failed=("Ошибка доставки", "red"), ready=("Отчёт готов", "green"))
 tpl.env.globals.update(STATUS=STATUS, ICONS=ICONS)
 
 
@@ -220,8 +222,15 @@ def meeting_status(request: Request, mid: int):
         return JSONResponse({"status": m.status, "progress": m.progress, "error": m.error})
 
 
-def _apply_form(mid: int, form):
+def _apply_form(mid: int, form, approve=False):
     with SessionLocal() as s:
+        values = {Meeting.progress: Meeting.progress}
+        if approve:
+            values = {Meeting.status: "delivery_queued", Meeting.approved_at: now(), Meeting.error: ""}
+        changed = s.query(Meeting).filter(Meeting.id == mid, Meeting.status.in_(("awaiting_approval", "rejected"))).update(
+            values, synchronize_session=False)
+        if not changed:
+            return False
         m = s.get(Meeting, mid)
         r = dict(m.report or {})
         r["title"] = form.get("title", r.get("title", ""))
@@ -248,13 +257,20 @@ def _apply_form(mid: int, form):
             m.tasks.append(Task(title=form["new_title"].strip(), assignee_id=int(a) if a else None,
                                 deadline=dt.date.fromisoformat(dl) if dl else None,
                                 deadline_source="manual" if dl else "none", priority=form.get("new_priority", "medium")))
+        s.query(Delivery).filter_by(meeting_id=mid, phase="draft", status="pending").update(
+            {Delivery.status: "cancelled"}, synchronize_session=False)
+        if not approve:
+            m.options = dict(m.options or {}, approval_revision=int((m.options or {}).get("approval_revision", 1)) + 1)
         s.commit()
+        return True
 
 
 @app.post("/meetings/{mid}/save")
 async def meeting_save(request: Request, mid: int):
     guard(request)
-    _apply_form(mid, await request.form())
+    if not _apply_form(mid, await request.form()):
+        raise HTTPException(409, "Редактирование доступно только до утверждения отчёта")
+    pipeline.request_approval(mid)
     return RedirectResponse(f"/meetings/{mid}?saved=1", 303)
 
 
@@ -264,8 +280,35 @@ async def meeting_approve(request: Request, mid: int):
     guard(request)
     form = await request.form()
     if form:
-        _apply_form(mid, form)
-    pipeline.submit_deliver(mid)
+        if _apply_form(mid, form, approve=True):
+            pipeline.dispatch_delivery(mid)
+    else:
+        pipeline.submit_deliver(mid)
+    return RedirectResponse(f"/meetings/{mid}", 303)
+
+
+@app.post("/meetings/{mid}/retry-delivery")
+def meeting_retry_delivery(request: Request, mid: int):
+    guard(request)
+    pipeline.retry_delivery(mid)
+    return RedirectResponse(f"/meetings/{mid}", 303)
+
+
+@app.post("/meetings/{mid}/deliveries/{delivery_id}/resend")
+async def meeting_resend_uncertain(request: Request, mid: int, delivery_id: int):
+    guard(request)
+    form = await request.form()
+    if form.get("confirm") != "yes":
+        raise HTTPException(400, "Подтвердите риск повторной отправки")
+    with SessionLocal() as s:
+        m = s.get(Meeting, mid)
+        if not m or m.status not in ("delivery_failed", "awaiting_approval"):
+            raise HTTPException(409, "Рассылка уже обрабатывается")
+        changed = s.query(Delivery).filter_by(id=delivery_id, meeting_id=mid, status="uncertain").update(
+            {Delivery.status: "pending", Delivery.next_attempt_at: None, Delivery.cycle_attempts: 0}, synchronize_session=False)
+        s.commit()
+    if changed:
+        pipeline.retry_delivery(mid)
     return RedirectResponse(f"/meetings/{mid}", 303)
 
 
@@ -282,8 +325,13 @@ def meeting_reanalyze(request: Request, mid: int):
     guard(request)
     with SessionLocal() as s:
         m = s.get(Meeting, mid)
+        changed = s.query(Meeting).filter(Meeting.id == mid, Meeting.status.in_(("awaiting_approval", "rejected", "error"))).update(
+            {Meeting.status: "analyzing", Meeting.progress: "Повторный анализ"}, synchronize_session=False)
+        if not changed:
+            raise HTTPException(409, "Нельзя пересобрать утверждённый отчёт")
         if not m.transcript:
             raise HTTPException(400, "Нет расшифровки")
+        m.options = dict(m.options or {}, approval_revision=int((m.options or {}).get("approval_revision", 1)) + 1)
         m.status, m.progress = "analyzing", "Повторный анализ"
         s.commit()
 
@@ -296,7 +344,7 @@ def meeting_reanalyze(request: Request, mid: int):
                 segs, mdate = m.transcript, m.meeting_date or deadlines.today()
             from . import analyze
             pipeline._save_report(mid, analyze.analyze(segs, emps, settings, mdate), settings)
-            pipeline._set(mid, status="awaiting_approval", progress="Ожидает проверки")
+            pipeline.request_approval(mid)
         except Exception as e:  # noqa: BLE001
             pipeline._set(mid, status="error", error=str(e)[:2000])
     job() if config.TESTING else pipeline.POOL.submit(job)
@@ -307,8 +355,13 @@ def meeting_reanalyze(request: Request, mid: int):
 def meeting_delete(request: Request, mid: int):
     guard(request)
     with SessionLocal() as s:
+        s.query(Meeting).filter_by(id=mid).update({Meeting.progress: Meeting.progress}, synchronize_session=False)
         m = s.get(Meeting, mid)
         if m:
+            if m.status in ("queued", "transcribing", "analyzing", "sending", "delivery_queued", "delivery_retry"):
+                raise HTTPException(409, "Дождитесь завершения обработки")
+            if s.query(Delivery).filter(Delivery.meeting_id == mid, Delivery.status.in_(("pending", "sending"))).first():
+                raise HTTPException(409, "Нельзя удалить совещание с незавершённой доставкой")
             if m.audio_path:
                 pathlib.Path(m.audio_path).unlink(missing_ok=True)
             s.delete(m)

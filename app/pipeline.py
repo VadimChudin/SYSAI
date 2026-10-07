@@ -6,8 +6,10 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import analyze, bitrix, config, deadlines, render, settings_store, telegram, transcribe
-from .db import DeadlineRequest, Employee, Meeting, SessionLocal, Task, TelegramChat, now
+from sqlalchemy import func
+
+from . import analyze, bitrix, config, deadlines, delivery, render, settings_store, telegram, transcribe
+from .db import DeadlineRequest, Delivery, Employee, Meeting, SessionLocal, Task, TelegramChat, now
 
 log = logging.getLogger("sysai.pipeline")
 POOL = ThreadPoolExecutor(max_workers=config.WORKERS, thread_name_prefix="sysai-job")
@@ -26,6 +28,7 @@ def _set(meeting_id: int, **kw):
 def load(s, meeting_id: int) -> Meeting:
     m = s.get(Meeting, meeting_id)
     _ = [t.assignee for t in m.tasks]  # eager-load for rendering outside the session
+    _ = list(m.deliveries)
     return m
 
 
@@ -70,12 +73,17 @@ def process(meeting_id: int):
         with SessionLocal() as s:
             m = s.get(Meeting, meeting_id)
             audio_path, source, mdate = m.audio_path, m.source, m.meeting_date or deadlines.today()
-        _set(meeting_id, status="transcribing", progress="Расшифровка записи", error="")
-        if source == "demo" or not audio_path:
-            total, segments = transcribe.mock_transcribe()
+            saved = m.transcript if m.status == "analyzing" else None
+            total = m.duration_sec
+        if saved is not None:
+            segments = saved
         else:
-            total, segments = transcribe.transcribe(audio_path, settings,
-                                                    progress=lambda p: _set(meeting_id, progress=p))
+            _set(meeting_id, status="transcribing", progress="Расшифровка записи", error="")
+            if source == "demo" or not audio_path:
+                total, segments = transcribe.mock_transcribe()
+            else:
+                total, segments = transcribe.transcribe(audio_path, settings,
+                                                        progress=lambda p: _set(meeting_id, progress=p))
         _set(meeting_id, transcript=segments, duration_sec=total, status="analyzing",
              progress="Составление отчёта и задач")
         with SessionLocal() as s:
@@ -88,7 +96,7 @@ def process(meeting_id: int):
         if settings["approval_required"]:
             request_approval(meeting_id)
         else:
-            deliver(meeting_id)
+            submit_deliver(meeting_id, allowed=("analyzing",))
     except Exception as e:  # noqa: BLE001
         log.exception("meeting %s failed", meeting_id)
         _set(meeting_id, status="error", progress="Ошибка", error=str(e)[:2000])
@@ -114,77 +122,113 @@ def _save_report(meeting_id: int, report: dict, settings: dict):
 
 def request_approval(meeting_id: int):
     settings = meeting_settings(meeting_id)
-    _set(meeting_id, status="awaiting_approval", progress="Ожидает проверки")
     with SessionLocal() as s:
+        changed = s.query(Meeting).filter(Meeting.id == meeting_id,
+                                         Meeting.status.in_(("analyzing", "awaiting_approval", "rejected"))).update(
+            {Meeting.progress: Meeting.progress}, synchronize_session=False)
+        if not changed:
+            return
         m = load(s, meeting_id)
-    approvers = settings.get("approver_chat_ids") or []
-    if not approvers:
-        _set(meeting_id, progress="Ожидает проверки в панели (проверяющие в Telegram не выбраны)")
-        return
-    pdf = render.report_pdf(m, settings)
-    buttons = [[{"text": "✅ Отправить", "callback_data": f"ap:{meeting_id}"},
-                {"text": "❌ Отклонить", "callback_data": f"rj:{meeting_id}"}]]
-    if config.PUBLIC_URL:
-        buttons.append([{"text": "✏️ Править в панели", "url": f"{config.PUBLIC_URL}/meetings/{meeting_id}"}])
-    for chat in approvers:
-        tg_safe(telegram.send_document, chat, render.pdf_name(m), pdf, "Черновик отчёта")
-        tg_safe(telegram.send_message, chat, render.summary_message(m, settings, draft=True), buttons)
+        approvers = settings.get("approver_chat_ids") or []
+        revision = int((m.options or {}).get("approval_revision", 0)) + 1
+        pdf = render.report_pdf(m, settings) if approvers else None
+        buttons = [[{"text": "✅ Отправить", "callback_data": f"ap:{meeting_id}:{revision}"},
+                    {"text": "❌ Отклонить", "callback_data": f"rj:{meeting_id}:{revision}"}]]
+        if config.PUBLIC_URL:
+            buttons.append([{"text": "✏️ Править в панели", "url": f"{config.PUBLIC_URL}/meetings/{meeting_id}"}])
+        m.options = dict(m.options or {}, approver_chat_ids=approvers, approval_revision=revision)
+        m.status, m.progress = "awaiting_approval", "Ожидает проверки"
+        if not approvers:
+            m.progress = "Ожидает проверки в панели (проверяющие в Telegram не выбраны)"
+        s.query(Delivery).filter(Delivery.meeting_id == meeting_id, Delivery.phase == "draft",
+                                 Delivery.status.in_(("pending", "failed", "uncertain"))).update(
+            {Delivery.status: "cancelled"}, synchronize_session=False)
+        for chat in approvers:
+            delivery.enqueue(s, meeting_id, "draft", "pdf", chat,
+                             {"filename": render.pdf_name(m), "caption": "Черновик отчёта", "approval_revision": revision},
+                             document=pdf, revision=str(revision))
+            delivery.enqueue(s, meeting_id, "draft", "summary", chat,
+                             {"text": render.summary_message(m, settings, draft=True), "buttons": buttons,
+                              "approval_revision": revision}, revision=str(revision))
+        s.commit()
+    delivery.flush(meeting_id, "draft")
 
 
 def deliver(meeting_id: int):
+    with SessionLocal() as s:
+        claimed = s.query(Meeting).filter_by(id=meeting_id, status="delivery_queued").update(
+            {Meeting.status: "sending", Meeting.progress: "Отправка"}, synchronize_session=False)
+        s.commit()
+    if not claimed:
+        return
     settings = meeting_settings(meeting_id)
-    _set(meeting_id, status="sending", progress="Отправка", approved_at=now())
     with SessionLocal() as s:
         m = load(s, meeting_id)
-    pdf = render.report_pdf(m, settings)
-    summary = render.summary_message(m, settings)
-    for chat in settings.get("report_chat_ids") or []:
-        tg_safe(telegram.send_message, chat, summary)
-        tg_safe(telegram.send_document, chat, render.pdf_name(m), pdf, f"📎 Полный отчёт: {render.e(m.title)}")
+        planned = (m.options or {}).get("delivery_planned") or s.query(Delivery).filter_by(meeting_id=meeting_id, phase="final").count()
+    if not planned:
+        _plan_delivery(m, settings)
+    delivery.flush(meeting_id, "final")
+    with SessionLocal() as s:
+        rows = s.query(Delivery).filter_by(meeting_id=meeting_id, phase="final").all()
+        pending = sum(r.status == "pending" for r in rows)
+        failed = sum(r.status in ("failed", "uncertain", "sending") for r in rows)
+        sent = sum(r.status == "sent" for r in rows)
+        m = s.get(Meeting, meeting_id)
+        m.status = "delivery_failed" if failed else ("delivery_retry" if pending else "done")
+        m.progress = f"Доставлено {sent} из {len(rows)}; требуют внимания: {failed}; в очереди: {pending}"
+        m.error = "Есть неподтверждённые отправки — смотрите журнал доставки" if failed else ""
+        m.sent_at = now() if not failed and not pending else None
+        if not rows:
+            m.status, m.progress, m.sent_at = "ready", "Отчёт готов; получатели рассылки не выбраны", None
+        s.commit()
 
-    orphan = []
+
+def _plan_delivery(m, settings):
+    pdf = render.report_pdf(m, settings) if settings.get("report_chat_ids") else None
     with SessionLocal() as s:
-        m = load(s, meeting_id)
-        by_chat: dict[str, list[Task]] = {}
-        for t in m.tasks:
+        meeting = load(s, m.id)
+        for chat in settings.get("report_chat_ids") or []:
+            delivery.enqueue(s, m.id, "final", "summary", chat, {"text": render.summary_message(m, settings)})
+            delivery.enqueue(s, m.id, "final", "pdf", chat,
+                             {"filename": render.pdf_name(m), "caption": f"📎 Полный отчёт: {render.e(m.title)}"}, document=pdf)
+        orphan, by_chat = [], {}
+        for t in meeting.tasks:
             chat = t.assignee.telegram_chat_id if t.assignee else ""
             if settings["send_tasks_to_assignees"] and chat:
                 by_chat.setdefault(chat, []).append(t)
-                t.status = "sent"
             elif not chat:
                 t.status = "no_recipient"
                 orphan.append(t)
             if settings.get("bitrix_enabled") and t.assignee and t.assignee.bitrix_user_id and not t.bitrix_task_id:
                 try:
-                    t.bitrix_task_id = bitrix.create_task(t, m)
+                    t.bitrix_task_id = bitrix.create_task(t, meeting)
                 except Exception as e:  # noqa: BLE001
                     log.warning("bitrix task failed: %s", e)
-        s.commit()
         for chat, tasks in by_chat.items():
-            tg_safe(telegram.send_message, chat, render.tasks_digest(tasks, m))
+            digest = delivery.enqueue(s, m.id, "final", "tasks", chat,
+                                      {"text": render.tasks_digest(tasks, meeting)}, task_ids=[t.id for t in tasks])
             if settings["deadline_mode"] == "ask":
                 for t in tasks:
                     if not t.deadline:
-                        _ask_deadline(s, t, chat)
-        s.commit()
+                        _ask_deadline(s, t, chat, digest.id)
         if orphan:
             text = "⚠️ <b>Задачи без получателя</b> (нет исполнителя или его Telegram):\n" + "\n".join(
                 f"• {render.e(t.title)} — {render.e(t.assignee_name or 'не назначен')}" for t in orphan)
             for chat in settings.get("approver_chat_ids") or []:
-                tg_safe(telegram.send_message, chat, text)
-    _set(meeting_id, status="done", progress="Отправлено", sent_at=now())
+                delivery.enqueue(s, m.id, "final", "orphan", chat, {"text": text})
+        meeting.options = dict(meeting.options or {}, delivery_planned=True)
+        s.commit()
 
 
-def _ask_deadline(s, task: Task, chat: str):
+def _ask_deadline(s, task: Task, chat: str, depends_on=None):
     buttons = [[{"text": "Сегодня", "callback_data": f"dl:{task.id}:d0"},
                 {"text": "Завтра", "callback_data": f"dl:{task.id}:d1"}],
                [{"text": "3 рабочих дня", "callback_data": f"dl:{task.id}:b3"},
                 {"text": "Неделя", "callback_data": f"dl:{task.id}:w1"}]]
-    msg = tg_safe(telegram.send_message, chat,
-                  f"⏳ Какой срок поставить по задаче «<b>{render.e(task.title)}</b>»?\n"
-                  "Нажмите кнопку или ответьте сообщением: «до пятницы», «15.10», «через 5 дней».", buttons)
-    task.status = "awaiting_deadline"
-    s.add(DeadlineRequest(task_id=task.id, chat_id=chat, message_id=(msg or {}).get("message_id")))
+    delivery.enqueue(s, task.meeting_id, "final", "deadline", chat,
+                     {"text": f"⏳ Какой срок поставить по задаче «<b>{render.e(task.title)}</b>»?\n"
+                      "Нажмите кнопку или ответьте сообщением: «до пятницы», «15.10», «через 5 дней».",
+                      "buttons": buttons}, task_ids=[task.id], depends_on=depends_on)
 
 
 def set_deadline(task_id: int, date: dt.date, source: str):
@@ -204,8 +248,18 @@ def set_deadline(task_id: int, date: dt.date, source: str):
         return t.title
 
 
-def reject(meeting_id: int):
-    _set(meeting_id, status="rejected", progress="Отклонено проверяющим")
+def reject(meeting_id: int, revision=None):
+    with SessionLocal() as s:
+        query = s.query(Meeting).filter_by(id=meeting_id, status="awaiting_approval")
+        if revision is not None:
+            query = query.filter(func.coalesce(Meeting.options["approval_revision"].as_integer(), 1) == revision)
+        changed = query.update(
+            {Meeting.status: "rejected", Meeting.progress: "Отклонено проверяющим"}, synchronize_session=False)
+        if changed:
+            s.query(Delivery).filter_by(meeting_id=meeting_id, phase="draft", status="pending").update(
+                {Delivery.status: "cancelled"}, synchronize_session=False)
+        s.commit()
+        return bool(changed)
 
 
 # ----------------------------------------------------------------------------- telegram updates
@@ -267,25 +321,28 @@ def _handle_callback(cb: dict, settings: dict):
     who = str(cb["from"]["id"])
     msg = cb.get("message") or {}
     chat_id = str(msg.get("chat", {}).get("id", who))
-    approvers = {str(x) for x in settings.get("approver_chat_ids") or []}
     kind, _, rest = data.partition(":")
     if kind in ("ap", "rj"):
+        raw_mid, _, raw_revision = rest.partition(":")
+        mid = int(raw_mid)
+        with SessionLocal() as s:
+            m = s.get(Meeting, mid)
+            if not m:
+                return telegram.answer_callback(cb["id"], "Совещание не найдено")
+            approvers = {str(x) for x in (m.options or {}).get("approver_chat_ids", settings.get("approver_chat_ids") or [])}
+            revision = int((m.options or {}).get("approval_revision", 1))
         if who not in approvers and chat_id not in approvers:
             return telegram.answer_callback(cb["id"], "Нет прав на проверку")
-        mid = int(rest)
-        with SessionLocal() as s:
-            status = s.get(Meeting, mid).status
-        if status != "awaiting_approval":
-            return telegram.answer_callback(cb["id"], "Уже обработано")
-        tg_safe(telegram.edit_buttons, chat_id, msg.get("message_id"), None)
+        if not raw_revision or int(raw_revision) != revision:
+            return telegram.answer_callback(cb["id"], "Черновик изменён — откройте новую версию")
         if kind == "ap":
-            telegram.answer_callback(cb["id"], "Отправляю")
-            submit_deliver(mid)
-            tg_safe(telegram.send_message, chat_id, "✅ Отчёт и задачи отправлены")
+            changed = submit_deliver(mid, allowed=("awaiting_approval",), revision=revision)
+            telegram.answer_callback(cb["id"], "Отправка поставлена в очередь" if changed else "Уже обработано")
         else:
-            reject(mid)
-            telegram.answer_callback(cb["id"], "Отклонено")
-            tg_safe(telegram.send_message, chat_id, "❌ Черновик отклонён. Его можно исправить в панели и отправить заново.")
+            changed = reject(mid, revision=revision)
+            telegram.answer_callback(cb["id"], "Отклонено" if changed else "Уже обработано")
+        if changed:
+            tg_safe(telegram.edit_buttons, chat_id, msg.get("message_id"), None)
         return
     if kind == "dl":
         task_id, code = rest.split(":")
@@ -299,9 +356,29 @@ def _handle_callback(cb: dict, settings: dict):
             tg_safe(telegram.send_message, chat_id, f"✅ Срок по задаче «{render.e(title)}»: <b>{deadlines.fmt(d)}</b>")
 
 
-def submit_deliver(meeting_id: int):
+def submit_deliver(meeting_id: int, allowed=("awaiting_approval", "rejected"), revision=None):
+    with SessionLocal() as s:
+        values = {Meeting.status: "delivery_queued", Meeting.error: ""}
+        if "awaiting_approval" in allowed or "analyzing" in allowed:
+            values[Meeting.approved_at] = now()
+        query = s.query(Meeting).filter(Meeting.id == meeting_id, Meeting.status.in_(allowed))
+        if revision is not None:
+            query = query.filter(func.coalesce(Meeting.options["approval_revision"].as_integer(), 1) == revision)
+        changed = query.update(
+            values, synchronize_session=False)
+        if changed:
+            s.query(Delivery).filter_by(meeting_id=meeting_id, phase="draft", status="pending").update(
+                {Delivery.status: "cancelled"}, synchronize_session=False)
+        s.commit()
+    if not changed:
+        return False
+    dispatch_delivery(meeting_id)
+    return True
+
+
+def dispatch_delivery(meeting_id):
     if config.TESTING:
-        deliver(meeting_id)
+        _safe_deliver(meeting_id)
     else:
         POOL.submit(_safe_deliver, meeting_id)
 
@@ -311,7 +388,54 @@ def _safe_deliver(meeting_id: int):
         deliver(meeting_id)
     except Exception as e:  # noqa: BLE001
         log.exception("deliver failed")
-        _set(meeting_id, status="error", error=str(e)[:2000])
+        delivery.recover(meeting_id)
+        _set(meeting_id, status="delivery_failed", progress="Ошибка доставки", error="Не удалось завершить рассылку")
+
+
+def retry_delivery(meeting_id):
+    with SessionLocal() as s:
+        m = s.get(Meeting, meeting_id)
+        if not m or m.status not in ("delivery_failed", "delivery_retry", "awaiting_approval"):
+            return False
+        phase = "draft" if m.status == "awaiting_approval" else "final"
+        s.query(Delivery).filter(Delivery.meeting_id == meeting_id, Delivery.phase == phase,
+                                 Delivery.status.in_(("failed", "pending"))).update(
+            {Delivery.status: "pending", Delivery.cycle_attempts: 0, Delivery.next_attempt_at: None}, synchronize_session=False)
+        s.commit()
+    if phase == "draft":
+        delivery.flush(meeting_id, phase)
+        return True
+    return submit_deliver(meeting_id, allowed=("delivery_failed", "delivery_retry"))
+
+
+def retry_due_deliveries():
+    with SessionLocal() as s:
+        drafts = [m.id for m in s.query(Meeting).filter_by(status="awaiting_approval")]
+        finals = [m.id for m in s.query(Meeting).filter(Meeting.status.in_(("delivery_retry", "delivery_failed")))
+                  if s.query(Delivery).filter(Delivery.meeting_id == m.id, Delivery.phase == "final",
+                                             Delivery.status == "pending",
+                                             Delivery.next_attempt_at <= now()).first()]
+    for mid in drafts:
+        delivery.flush(mid, "draft")
+    for mid in finals:
+        submit_deliver(mid, allowed=("delivery_retry", "delivery_failed"))
+
+
+def resume_jobs():
+    delivery.recover()
+    with SessionLocal() as s:
+        s.query(Meeting).filter_by(status="sending").update({Meeting.status: "delivery_queued"}, synchronize_session=False)
+        s.commit()
+        processing = [m.id for m in s.query(Meeting).filter(Meeting.status.in_(("queued", "transcribing", "analyzing")))]
+        sending = [m.id for m in s.query(Meeting).filter_by(status="delivery_queued")]
+        legacy_drafts = [m.id for m in s.query(Meeting).filter_by(status="awaiting_approval")
+                         if "approval_revision" not in (m.options or {})]
+    for mid in processing:
+        submit(mid)
+    for mid in sending:
+        _safe_deliver(mid) if config.TESTING else POOL.submit(_safe_deliver, mid)
+    for mid in legacy_drafts:
+        request_approval(mid)
 
 
 # ----------------------------------------------------------------------------- background loops
@@ -344,17 +468,13 @@ def mic_scan():
 
 
 def start_background():
+    resume_jobs()
     def loop():
         while True:
-            for fn in (mic_scan, deadline_timeouts):
+            for fn in (mic_scan, deadline_timeouts, retry_due_deliveries):
                 try:
                     fn()
                 except Exception:
                     log.exception("%s failed", fn.__name__)
             time.sleep(30)
     threading.Thread(target=loop, daemon=True, name="sysai-bg").start()
-    # resume jobs interrupted by a restart
-    with SessionLocal() as s:
-        stuck = [m.id for m in s.query(Meeting).filter(Meeting.status.in_(["queued", "transcribing", "analyzing"]))]
-    for mid in stuck:
-        submit(mid)

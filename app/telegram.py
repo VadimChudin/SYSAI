@@ -12,7 +12,10 @@ log = logging.getLogger("sysai.telegram")
 
 
 class TelegramError(RuntimeError):
-    pass
+    def __init__(self, message, retryable=False, retry_after=30):
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after = retry_after
 
 
 def _url(method: str) -> str:
@@ -28,9 +31,14 @@ def call(method: str, data: dict | None = None, files: dict | None = None, timeo
         r = httpx.post(_url(method), data=payload, files=files, timeout=timeout)
     else:
         r = httpx.post(_url(method), json=data or {}, timeout=timeout)
+    if r.status_code >= 500:
+        # A gateway error cannot prove that the send was rejected upstream.
+        raise RuntimeError(f"{method}: Telegram HTTP {r.status_code}")
     body = r.json()
     if not body.get("ok"):
-        raise TelegramError(f"{method}: {body.get('description')}")
+        code = body.get("error_code", r.status_code)
+        raise TelegramError(f"{method}: {body.get('description')}", retryable=code == 429,
+                            retry_after=body.get("parameters", {}).get("retry_after", 30))
     return body["result"]
 
 

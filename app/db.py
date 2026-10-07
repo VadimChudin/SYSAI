@@ -2,7 +2,7 @@
 import datetime as dt
 import json
 
-from sqlalchemy import (JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text,
+from sqlalchemy import (JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint,
                         create_engine)
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -72,6 +72,7 @@ class Meeting(Base):
     approved_at = Column(DateTime(timezone=True), nullable=True)
     sent_at = Column(DateTime(timezone=True), nullable=True)
     tasks = relationship("Task", back_populates="meeting", cascade="all, delete-orphan", order_by="Task.id")
+    deliveries = relationship("Delivery", cascade="all, delete-orphan", order_by="Delivery.id")
 
 
 class Task(Base):
@@ -105,6 +106,29 @@ class DeadlineRequest(Base):
     task = relationship("Task")
 
 
+class Delivery(Base):
+    __tablename__ = "deliveries"
+    __table_args__ = (UniqueConstraint("meeting_id", "key"),)
+    id = Column(Integer, primary_key=True)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False, index=True)
+    key = Column(String(160), nullable=False)
+    phase = Column(String(10), nullable=False)
+    kind = Column(String(30), nullable=False)
+    chat_id = Column(String(40), nullable=False)
+    payload = Column(JSON, nullable=False)
+    document = Column(LargeBinary, nullable=True)
+    task_ids = Column(JSON, nullable=False, default=list)
+    depends_on = Column(Integer, ForeignKey("deliveries.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    cycle_attempts = Column(Integer, nullable=False, default=0)
+    message_id = Column(Integer, nullable=True)
+    error = Column(Text, default="")
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=now)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+
+
 def init_db():
     Base.metadata.create_all(engine)
     # lightweight migration for databases created by earlier versions
@@ -113,6 +137,10 @@ def init_db():
     if "options" not in cols:
         with engine.begin() as con:
             con.execute(text("ALTER TABLE meetings ADD COLUMN options JSON"))
+    delivery_cols = {c["name"] for c in inspect(engine).get_columns("deliveries")}
+    if "cycle_attempts" not in delivery_cols:
+        with engine.begin() as con:
+            con.execute(text("ALTER TABLE deliveries ADD COLUMN cycle_attempts INTEGER NOT NULL DEFAULT 0"))
 
 
 def dumps(v) -> str:

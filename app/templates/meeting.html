@@ -50,9 +50,13 @@
     <tbody>{% for d in m.deliveries %}
       {% set ds = {'pending':('В очереди','amber'),'sending':('Отправляется','blue'),'sent':('Доставлено','green'),'failed':('Не доставлено','red'),'uncertain':('Требует проверки','amber'),'cancelled':('Отменено','gray')}.get(d.status,(d.status,'gray')) %}
       <tr><td>{{ d.chat_id }}</td>
-        <td>{{ 'Черновик · ' if d.phase == 'draft' }}{{ {'summary':'Краткий отчёт','pdf':'PDF','tasks':'Задачи','deadline':'Уточнение срока','orphan':'Задачи без исполнителя'}.get(d.kind,d.kind) }}</td>
+        <td>{{ 'Черновик · ' if d.phase == 'draft' }}{{ {'summary':'Краткий отчёт','pdf':'PDF','tasks':'Задачи','deadline':'Уточнение срока','orphan':'Задачи без исполнителя','reply':'Ответ сотруднику','escalation':'Вопрос секретарю'}.get(d.kind,d.kind) }}</td>
         <td><span class="pill {{ ds[1] }}">{{ ds[0] }}</span></td><td>{{ d.attempts }}</td>
         <td>{% if d.status == 'sent' %}{{ d.sent_at.strftime('%d.%m %H:%M') if d.sent_at }} · сообщение {{ d.message_id }}{% else %}{{ d.error }}{% endif %}
+          {% if d.phase == 'dialogue' and d.status in ('failed','uncertain') %}
+          <form method="post" action="/meetings/{{ m.id }}/dialogue-deliveries/{{ d.id }}/retry" {% if d.status == 'uncertain' %}onsubmit="return confirm('Сообщение могло быть доставлено. Проверьте чат перед повтором. Продолжить?')"{% endif %}>
+            <button class="btn sm" name="confirm" value="yes">{{ 'Повторить с риском дубля' if d.status == 'uncertain' else 'Повторить ответ' }}</button>
+          </form>{% endif %}
           {% if d.status == 'uncertain' and m.status in ('delivery_failed','awaiting_approval') %}
           <form method="post" action="/meetings/{{ m.id }}/deliveries/{{ d.id }}/resend" onsubmit="return confirm('Сначала проверьте Telegram-чат. Сообщение могло быть доставлено. Повторить с риском дубля?')">
             <button class="btn" name="confirm" value="yes">Повторить с риском дубля</button>
@@ -64,6 +68,29 @@
 {% endif %}
 
 {% if m.report %}
+{% set dialogue_version = [] %}
+{% for x in m.dialogue %}{% set _ = dialogue_version.append([x.id,x.status]) %}{% endfor %}
+{% for x in m.escalations %}{% set _ = dialogue_version.append([x.id,x.status]) %}{% endfor %}
+{% for x in m.deliveries if x.phase == 'dialogue' %}{% set _ = dialogue_version.append([x.id,x.status]) %}{% endfor %}
+<section class="card" id="employee-dialogues" data-version='{{ dialogue_version|tojson }}'>
+  <h2>Диалоги с сотрудниками</h2>
+  <p class="small muted">История отдельная для каждого сотрудника. Новые сообщения и обращения обновляются автоматически, пока вы не редактируете форму.</p>
+  {% for issue in m.escalations %}<div class="topic">
+    {% set person = employees|selectattr('telegram_chat_id','equalto',issue.chat_id)|first %}
+    <div class="row between"><b>Вопрос секретарю · {{ person.name if person else issue.chat_id }}</b><span class="pill {{ 'amber' if issue.status == 'open' else 'green' }}">{{ 'Открыт' if issue.status == 'open' else 'Закрыт' }}</span></div>
+    <p>{{ issue.reason }}</p>
+    {% if issue.status == 'open' %}<form method="post" action="/meetings/{{ m.id }}/escalations/{{ issue.id }}/resolve"><button class="btn sm">Отметить решённым</button></form>{% endif %}
+  </div>{% endfor %}
+  {% for messages in m.dialogue|groupby('chat_id') %}
+  {% set person = employees|selectattr('telegram_chat_id','equalto',messages.grouper)|first %}
+  <details style="margin-top:12px"><summary><b>{{ person.name if person else messages.grouper }}</b> · {{ messages.list|length }} сообщений</summary>
+    {% for msg in messages.list %}<div class="topic">
+      <div class="small muted">{{ 'Сотрудник' if msg.role == 'user' else 'SYSAI' }} · {{ msg.created_at.strftime('%d.%m %H:%M') }} · {{ {'pending':'В очереди','processing':'Обрабатывается','done':'Обработано','sent':'Доставлено','error':'Ошибка'}.get(msg.status,msg.status) }}</div>
+      <p style="white-space:pre-wrap">{{ msg.text }}</p>{% if msg.error %}<p class="warn small">{{ msg.error }}</p>{% endif %}
+    </div>{% endfor %}
+  </details>
+  {% else %}<p class="muted">Ответов сотрудников пока нет.</p>{% endfor %}
+</section>
 <form method="post" action="/meetings/{{ m.id }}/save">
 <fieldset {{ 'disabled' if m.status not in ('awaiting_approval','rejected') }} style="border:0;padding:0;margin:0;min-width:0">
 <section class="card">

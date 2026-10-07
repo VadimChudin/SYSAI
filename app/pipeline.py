@@ -30,6 +30,8 @@ def load(s, meeting_id: int) -> Meeting:
     _ = [t.assignee for t in m.tasks]  # eager-load for rendering outside the session
     _ = list(m.deliveries)
     _ = list(m.checkpoints)
+    _ = list(m.dialogue)
+    _ = list(m.escalations)
     return m
 
 
@@ -252,8 +254,24 @@ def _ask_deadline(s, task: Task, chat: str, depends_on=None):
                       "buttons": buttons}, task_ids=[task.id], depends_on=depends_on)
 
 
-def set_deadline(task_id: int, date: dt.date, source: str):
+def set_deadline(task_id: int, date: dt.date, source: str, chat_id=None):
     with SessionLocal() as s:
+        if source == "default":
+            changed = s.query(Task).filter_by(id=task_id, deadline=None).update(
+                {Task.deadline: date, Task.deadline_source: source}, synchronize_session=False)
+            if not changed:
+                return None
+        if chat_id is not None:
+            employee = s.query(Employee).filter_by(telegram_chat_id=str(chat_id), active=True).first()
+            task = s.get(Task, task_id)
+            if not employee or not task or task.assignee_id != employee.id or not settings_store.get("allow_deadline_proposals"):
+                return None
+            if settings_store.for_meeting(task.meeting.options).get("deadline_mode") != "ask":
+                return None
+            changed = s.query(Task).filter_by(id=task_id, assignee_id=employee.id, deadline=None).update(
+                {Task.deadline: date, Task.deadline_source: source}, synchronize_session=False)
+            if not changed:
+                return None
         t = s.get(Task, task_id)
         t.deadline, t.deadline_source = date, source
         if t.status == "awaiting_deadline":
@@ -325,15 +343,28 @@ def handle_update(u: dict):
     with SessionLocal() as s:
         q = s.query(DeadlineRequest).filter_by(chat_id=cid, resolved=False)
         reply_id = (msg.get("reply_to_message") or {}).get("message_id")
-        req = (q.filter_by(message_id=reply_id).first() if reply_id else None) or q.order_by(DeadlineRequest.id).first()
+        if reply_id:
+            req = q.filter_by(message_id=reply_id).first()
+        else:
+            requests = q.order_by(DeadlineRequest.id).limit(2).all()
+            req = requests[0] if len(requests) == 1 else None
         task_id = req.task_id if req else None
-    if not task_id:
-        return
     d = deadlines.parse(text)
+    if settings.get("dialogue_enabled"):
+        from . import conversations
+        if conversations.accept(msg):
+            return
+    if not task_id:
+        if d:
+            tg_safe(telegram.send_message, cid, "Уточните, к какой задаче относится срок: ответьте на сообщение с вопросом по этой задаче.")
+        return
     if not d:
         tg_safe(telegram.send_message, cid, "Не понял срок 🙏 Напишите, например: «до пятницы», «15.10» или «через 3 дня».")
         return
-    title = set_deadline(task_id, d, "asked")
+    title = set_deadline(task_id, d, "asked", chat_id=cid)
+    if title is None:
+        tg_safe(telegram.send_message, cid, "Срок не изменён. Его согласование требует проверки секретарём.")
+        return
     tg_safe(telegram.send_message, cid, f"✅ Срок по задаче «{render.e(title)}»: <b>{deadlines.fmt(d)}</b>")
 
 
@@ -367,11 +398,20 @@ def _handle_callback(cb: dict, settings: dict):
         return
     if kind == "dl":
         task_id, code = rest.split(":")
+        if who != chat_id:
+            return telegram.answer_callback(cb["id"], "Уточнение срока доступно в личном чате сотрудника")
+        with SessionLocal() as s:
+            req = s.query(DeadlineRequest).filter_by(task_id=int(task_id), chat_id=who,
+                                                    message_id=msg.get("message_id"), resolved=False).first()
+        if not req:
+            return telegram.answer_callback(cb["id"], "Этот вопрос уже обработан или недоступен")
         base = deadlines.today()
         d = {"d0": base, "d1": base + dt.timedelta(days=1), "b3": deadlines.add_business_days(base, 3),
              "w1": base + dt.timedelta(weeks=1)}.get(code)
         if d:
-            title = set_deadline(int(task_id), d, "asked")
+            title = set_deadline(int(task_id), d, "asked", chat_id=who)
+            if title is None:
+                return telegram.answer_callback(cb["id"], "Срок не изменён — требуется согласование")
             telegram.answer_callback(cb["id"], "Срок сохранён")
             tg_safe(telegram.edit_buttons, chat_id, msg.get("message_id"), None)
             tg_safe(telegram.send_message, chat_id, f"✅ Срок по задаче «{render.e(title)}»: <b>{deadlines.fmt(d)}</b>")
@@ -470,6 +510,8 @@ def deadline_timeouts():
     for task_id, chat in due:
         d = deadlines.add_business_days(deadlines.today(), int(settings["default_deadline_days"]))
         title = set_deadline(task_id, d, "default")
+        if title is None:
+            continue
         tg_safe(telegram.send_message, chat, f"⏳ Ответа не было — поставил срок по умолчанию для «{render.e(title)}»: "
                                              f"<b>{deadlines.fmt(d)}</b>")
 
@@ -489,10 +531,12 @@ def mic_scan():
 
 
 def start_background():
+    from . import conversations
     resume_jobs()
+    conversations.recover()
     def loop():
         while True:
-            for fn in (mic_scan, deadline_timeouts, retry_due_deliveries):
+            for fn in (mic_scan, deadline_timeouts, retry_due_deliveries, conversations.run_pending):
                 try:
                     fn()
                 except Exception:

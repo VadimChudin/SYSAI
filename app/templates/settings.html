@@ -56,6 +56,16 @@
   </div>
 </section>
 <section class="card">
+  <h2>Диалоги с сотрудниками</h2>
+  {{ toggle('dialogue_enabled', s.dialogue_enabled, 'Отвечать сотрудникам по контексту задач', 'История и очередь отдельные для каждого сотрудника. Сложные вопросы передаются секретарю.') }}
+  <label class="f">Бесплатная модель переписки <input name="conversation_model" value="{{ s.conversation_model }}"></label>
+  <p class="small muted">Используйте openrouter/free или модель с суффиксом :free. Платная модель автоматически не подключается. Бесплатные модели имеют ограничения доступности и частоты запросов.</p>
+  <label class="f">Стиль общения <textarea name="conversation_tone" rows="3" maxlength="1000">{{ s.conversation_tone }}</textarea></label>
+  {{ toggle('allow_deadline_proposals', s.allow_deadline_proposals, 'Согласовывать первый срок без секретаря', 'Только в режиме «Уточнять», если срок ещё не задан. Изменение уже установленного срока — через секретаря.') }}
+  <h3>Секретарь для сложных вопросов</h3>{{ chat_picker('secretary_chat_ids', s.secretary_chat_ids, chats) }}
+  <p class="small muted">Если секретарь не выбран, используются проверяющие черновиков. Если нет ни тех, ни других, вопрос остаётся видимым в карточке совещания.</p>
+</section>
+<section class="card">
   <h2>Оформление отчёта</h2>
   <div class="row"><label class="f">Компания <input name="company_name" value="{{ s.company_name }}"></label>
     <label class="f sm">Фирменный цвет <input type="color" name="accent_color" value="{{ s.accent_color }}"></label></div>

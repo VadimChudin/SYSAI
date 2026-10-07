@@ -34,12 +34,15 @@
     if (r.ok) location.reload(); else { mic.checked = !mic.checked; alert('Не удалось сохранить'); }
   });
   const pill = document.getElementById('status-pill');
-  if (pill && ['queued', 'transcribing', 'analyzing', 'sending', 'delivery_queued', 'delivery_retry'].includes(pill.dataset.status)) {
+  const dialogues = document.getElementById('employee-dialogues');
+  let editing = false;
+  document.querySelectorAll('form[action$="/save"] input, form[action$="/save"] textarea, form[action$="/save"] select').forEach(el => el.addEventListener('input', () => { editing = true; }));
+  if (pill && (dialogues || ['queued', 'transcribing', 'analyzing', 'sending', 'delivery_queued', 'delivery_retry'].includes(pill.dataset.status))) {
     const tick = async () => {
       try {
         const r = await fetch('/meetings/' + pill.dataset.id + '/status', { headers: { accept: 'application/json' } });
         const j = await r.json();
-        if (j.status !== pill.dataset.status) return location.reload();
+        if (!editing && (j.status !== pill.dataset.status || (dialogues && JSON.stringify(j.dialogue_version) !== JSON.stringify(JSON.parse(dialogues.dataset.version))))) return location.reload();
         document.getElementById('progress').textContent = j.progress;
       } catch (e) { }
       setTimeout(tick, 3000);

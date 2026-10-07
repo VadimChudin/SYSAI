@@ -23,6 +23,11 @@ DEFAULTS = {
     # models (OpenRouter)
     "transcribe_model": "google/gemini-2.5-flash",
     "report_model": "google/gemini-2.5-pro",
+    "conversation_model": "openrouter/free",
+    "dialogue_enabled": True,
+    "conversation_tone": "Доброжелательно и по делу. Короткие сообщения, без канцелярита и лишних эмодзи.",
+    "allow_deadline_proposals": True,
+    "secretary_chat_ids": [],
     "chunk_minutes": 30,
     "language": "ru",
     "glossary": "SYSAI, Bitrix24, Telegram, OpenRouter, CRM, KPI, roadmap, deadline",  # mocked terms for now

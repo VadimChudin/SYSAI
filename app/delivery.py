@@ -52,7 +52,10 @@ def send(row_id):
         if document is not None:
             result = telegram.send_document(chat, payload["filename"], document, payload.get("caption", ""))
         else:
-            result = telegram.send_message(chat, payload["text"], payload.get("buttons"))
+            if payload.get("reply_to"):
+                result = telegram.send_message(chat, payload["text"], payload.get("buttons"), reply_to=payload["reply_to"])
+            else:
+                result = telegram.send_message(chat, payload["text"], payload.get("buttons"))
         message_id = result["message_id"]
     except Exception as exc:
         # Read timeouts and interrupted sends cannot prove Telegram rejected the message.

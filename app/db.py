@@ -74,6 +74,8 @@ class Meeting(Base):
     tasks = relationship("Task", back_populates="meeting", cascade="all, delete-orphan", order_by="Task.id")
     deliveries = relationship("Delivery", cascade="all, delete-orphan", order_by="Delivery.id")
     checkpoints = relationship("ProcessingCheckpoint", cascade="all, delete-orphan")
+    dialogue = relationship("ConversationMessage", cascade="all, delete-orphan", order_by="ConversationMessage.id")
+    escalations = relationship("ConversationEscalation", cascade="all, delete-orphan", order_by="ConversationEscalation.id")
 
 
 class Task(Base):
@@ -105,6 +107,34 @@ class DeadlineRequest(Base):
     asked_at = Column(DateTime(timezone=True), default=now)
     resolved = Column(Boolean, default=False)
     task = relationship("Task")
+
+
+class ConversationMessage(Base):
+    __tablename__ = "conversation_messages"
+    __table_args__ = (UniqueConstraint("chat_id", "message_id"),)
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(String(40), nullable=False, index=True)
+    message_id = Column(Integer, nullable=True)
+    role = Column(String(20), nullable=False)
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    text = Column(Text, nullable=False)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=True)
+    reply_to = Column(Integer, nullable=True)
+    result = Column(JSON, nullable=True)
+    action_applied = Column(Boolean, nullable=False, default=False)
+    error = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), default=now)
+
+
+class ConversationEscalation(Base):
+    __tablename__ = "conversation_escalations"
+    id = Column(Integer, primary_key=True)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False, index=True)
+    task_id = Column(Integer, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
+    chat_id = Column(String(40), nullable=False)
+    reason = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="open")
+    created_at = Column(DateTime(timezone=True), default=now)
 
 
 class ProcessingCheckpoint(Base):

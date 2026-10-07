@@ -47,7 +47,7 @@ def send_message(chat_id, text: str, buttons: list | None = None, reply_to: int 
     if buttons:
         data["reply_markup"] = {"inline_keyboard": buttons}
     if reply_to:
-        data["reply_parameters"] = {"message_id": reply_to}
+        data["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
     return call("sendMessage", data)
 
 

@@ -17,7 +17,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import bitrix, config, deadlines, pipeline, render, settings_store, telegram
 from .analyze import mmss
 from .ui_icons import ICONS
-from .db import Delivery, Employee, Meeting, SessionLocal, Task, TelegramChat, init_db, now
+from .db import ConversationEscalation, Delivery, Employee, Meeting, SessionLocal, Task, TelegramChat, init_db, now
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sysai")
@@ -219,7 +219,10 @@ def meeting_status(request: Request, mid: int):
     guard(request)
     with SessionLocal() as s:
         m = s.get(Meeting, mid)
-        return JSONResponse({"status": m.status, "progress": m.progress, "error": m.error})
+        return JSONResponse({"status": m.status, "progress": m.progress, "error": m.error,
+                             "dialogue_version": [[x.id, x.status] for x in m.dialogue] +
+                                                [[x.id, x.status] for x in m.escalations] +
+                                                [[x.id, x.status] for x in m.deliveries if x.phase == "dialogue"]})
 
 
 def _apply_form(mid: int, form, approve=False):
@@ -298,6 +301,36 @@ def meeting_retry_delivery(request: Request, mid: int):
 def meeting_retry_processing(request: Request, mid: int):
     guard(request)
     pipeline.retry_processing(mid)
+    return RedirectResponse(f"/meetings/{mid}", 303)
+
+
+@app.post("/meetings/{mid}/escalations/{escalation_id}/resolve")
+def meeting_resolve_escalation(request: Request, mid: int, escalation_id: int):
+    guard(request)
+    with SessionLocal() as s:
+        s.query(ConversationEscalation).filter_by(id=escalation_id, meeting_id=mid, status="open").update(
+            {ConversationEscalation.status: "resolved"}, synchronize_session=False)
+        s.commit()
+    return RedirectResponse(f"/meetings/{mid}", 303)
+
+
+@app.post("/meetings/{mid}/dialogue-deliveries/{delivery_id}/retry")
+async def meeting_retry_dialogue_delivery(request: Request, mid: int, delivery_id: int):
+    guard(request)
+    form = await request.form()
+    with SessionLocal() as s:
+        row = s.query(Delivery).filter_by(id=delivery_id, meeting_id=mid, phase="dialogue").first()
+        if not row or row.status not in ("failed", "uncertain"):
+            raise HTTPException(409, "Отправка уже обработана или недоступна")
+        if row.status == "uncertain" and form.get("confirm") != "yes":
+            raise HTTPException(400, "Сначала проверьте чат и подтвердите риск повторной отправки")
+        s.query(Delivery).filter(Delivery.id == row.id, Delivery.status.in_(("failed", "uncertain"))).update(
+            {Delivery.status: "pending", Delivery.next_attempt_at: None, Delivery.cycle_attempts: 0},
+            synchronize_session=False)
+        s.commit()
+    from . import conversations, delivery
+    delivery.send(delivery_id)
+    conversations.run_pending()
     return RedirectResponse(f"/meetings/{mid}", 303)
 
 
@@ -420,6 +453,9 @@ def _chat_ids(form, name: str) -> list[str]:
 async def settings_save(request: Request):
     guard(request)
     f = await request.form()
+    conversation_model = f.get("conversation_model", "").strip() or settings_store.DEFAULTS["conversation_model"]
+    if conversation_model != "openrouter/free" and not conversation_model.endswith(":free"):
+        raise HTTPException(400, "Для переписки выберите openrouter/free или модель с суффиксом :free")
     settings_store.set_many({
         "auto_ingest": bool(f.get("auto_ingest")),
         "approval_required": bool(f.get("approval_required")),
@@ -432,6 +468,11 @@ async def settings_save(request: Request):
         "ask_timeout_hours": _num(f.get("ask_timeout_hours"), 24),
         "transcribe_model": f.get("transcribe_model", "").strip() or settings_store.DEFAULTS["transcribe_model"],
         "report_model": f.get("report_model", "").strip() or settings_store.DEFAULTS["report_model"],
+        "conversation_model": conversation_model,
+        "dialogue_enabled": bool(f.get("dialogue_enabled")),
+        "conversation_tone": (f.get("conversation_tone") or settings_store.DEFAULTS["conversation_tone"]).strip()[:1000],
+        "allow_deadline_proposals": bool(f.get("allow_deadline_proposals")),
+        "secretary_chat_ids": _chat_ids(f, "secretary_chat_ids"),
         "chunk_minutes": max(5, min(60, int(f.get("chunk_minutes") or 30))),
         "glossary": f.get("glossary", ""),
         "company_name": f.get("company_name", "").strip() or "Компания",

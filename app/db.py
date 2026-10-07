@@ -78,6 +78,34 @@ class Meeting(Base):
     escalations = relationship("ConversationEscalation", cascade="all, delete-orphan", order_by="ConversationEscalation.id")
 
 
+class Recording(Base):
+    __tablename__ = "recordings"
+
+    id = Column(String(64), primary_key=True)
+    owner = Column(String(128), nullable=False, index=True)
+    mime_type = Column(String(80), nullable=False)
+    title = Column(String(300), nullable=False, default="")
+    meeting_date = Column(Date, nullable=True)
+    options = Column(JSON, nullable=False, default=dict)
+    status = Column(String(20), nullable=False, default="recording", index=True)
+    next_sequence = Column(Integer, nullable=False, default=0)
+    size_bytes = Column(Integer, nullable=False, default=0)
+    path = Column(String(500), nullable=False, default="")
+    meeting_id = Column(Integer, ForeignKey("meetings.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=now, onupdate=now)
+
+
+class RecordingChunk(Base):
+    __tablename__ = "recording_chunks"
+    __table_args__ = (UniqueConstraint("recording_id", "sequence"),)
+
+    recording_id = Column(String(64), ForeignKey("recordings.id", ondelete="CASCADE"), primary_key=True)
+    sequence = Column(Integer, primary_key=True)
+    digest = Column(String(64), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+
+
 class Task(Base):
     __tablename__ = "tasks"
     id = Column(Integer, primary_key=True)

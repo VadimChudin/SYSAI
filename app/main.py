@@ -4,12 +4,13 @@ import hmac
 import logging
 import os
 import pathlib
+import secrets
 import shutil
 import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -166,6 +167,56 @@ async def mic_toggle(request: Request):
     data = await request.json()
     settings_store.set_many({"auto_ingest": bool(data.get("on"))})
     return {"auto_ingest": settings_store.get("auto_ingest")}
+
+
+def recording_owner(request):
+    guard(request)
+    if "recording_owner" not in request.session:
+        request.session["recording_owner"] = secrets.token_hex(24)
+    return request.session["recording_owner"]
+
+
+@app.post("/recordings")
+async def recording_start(request: Request):
+    from . import recording
+    owner = recording_owner(request)
+    form = await request.form()
+    try:
+        date = dt.date.fromisoformat(form.get("meeting_date")) if form.get("meeting_date") else deadlines.today()
+    except ValueError:
+        raise HTTPException(400, "Некорректная дата совещания") from None
+    return recording.start(owner, form.get("mime_type", ""), (form.get("title") or "").strip()[:300], date, _options(form))
+
+
+@app.post("/recordings/{rid}/chunks/{sequence}")
+async def recording_chunk(request: Request, rid: str, sequence: int):
+    from . import recording
+    owner = recording_owner(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 8 * 1024 * 1024:
+            raise HTTPException(413, "Одна часть записи превышает 8 МБ")
+        body.extend(chunk)
+    return recording.append(owner, rid, sequence, bytes(body))
+
+
+@app.post("/recordings/{rid}/finish")
+def recording_finish(request: Request, rid: str):
+    from . import recording
+    return recording.finish(recording_owner(request), rid)
+
+
+@app.post("/recordings/{rid}/cancel")
+def recording_cancel(request: Request, rid: str):
+    from . import recording
+    return recording.cancel(recording_owner(request), rid)
+
+
+@app.get("/recordings/{rid}/audio")
+def recording_download(request: Request, rid: str):
+    from . import recording
+    path, mime = recording.audio_file(recording_owner(request), rid)
+    return FileResponse(path, media_type=mime, filename=f"recording{path.suffix}")
 
 
 @app.post("/upload")

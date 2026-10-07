@@ -12,7 +12,7 @@ def _bool(name: str, default: bool = False) -> bool:
 BASE_DIR = pathlib.Path(__file__).resolve().parent
 DATA_DIR = pathlib.Path(os.getenv("DATA_DIR", BASE_DIR.parent / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-
+hoplite/render-database-startup
 def database_url(value: str | None, data_dir: pathlib.Path) -> str:
     url = (value or "").strip() or f"sqlite:///{data_dir / 'sysai.db'}"
     # Provider URLs omit the installed SQLAlchemy psycopg driver name.
@@ -23,6 +23,12 @@ def database_url(value: str | None, data_dir: pathlib.Path) -> str:
 
 
 DATABASE_URL = database_url(os.getenv("DATABASE_URL"), DATA_DIR)
+
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip() or f"sqlite:///{DATA_DIR / 'sysai.db'}"
+for prefix in ("postgres://", "postgresql://"):
+    if DATABASE_URL.startswith(prefix):
+        DATABASE_URL = DATABASE_URL.replace(prefix, "postgresql+psycopg://", 1)
+main
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "SYSAI")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "SYSAI")
@@ -35,7 +41,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_MODE = os.getenv("TELEGRAM_MODE", "webhook")  # webhook | polling | off
 # Telegram allows only [A-Za-z0-9_-] in the secret token, so derive it from SECRET_KEY
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET") or hashlib.sha256(SECRET_KEY.encode()).hexdigest()[:48]
-PUBLIC_URL = (os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
+PUBLIC_URL = (os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or
+              (f"https://{os.environ['RAILWAY_PUBLIC_DOMAIN']}" if os.getenv("RAILWAY_PUBLIC_DOMAIN") else "")).rstrip("/")
 
 BITRIX_WEBHOOK_URL = os.getenv("BITRIX_WEBHOOK_URL", "").rstrip("/")
 

@@ -12,6 +12,10 @@ class LLMError(RuntimeError):
     pass
 
 
+class IncompleteResponse(LLMError):
+    pass
+
+
 def chat(model: str, messages: list, json_mode: bool = False, temperature: float = 0.1,
          max_tokens: int | None = None, timeout: float = 600) -> str:
     key = config.openrouter_key()
@@ -29,7 +33,7 @@ def chat(model: str, messages: list, json_mode: bool = False, temperature: float
         try:
             r = httpx.post(f"{config.OPENROUTER_BASE_URL}/chat/completions", json=body, headers=headers,
                            timeout=timeout)
-            if r.status_code in (429, 500, 502, 503, 504):
+            if r.status_code in (408, 429, 500, 502, 503, 504):
                 last = f"HTTP {r.status_code}: {r.text[:300]}"
                 time.sleep(5 * (attempt + 1))
                 continue
@@ -38,7 +42,19 @@ def chat(model: str, messages: list, json_mode: bool = False, temperature: float
             data = r.json()
             if "error" in data:
                 raise LLMError(f"OpenRouter: {data['error']}")
-            return data["choices"][0]["message"]["content"] or ""
+            try:
+                choice = data["choices"][0]
+                reason = choice.get("finish_reason")
+                content = choice["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                raise LLMError("OpenRouter вернул ответ без результата модели") from None
+            if reason == "length":
+                raise IncompleteResponse("Ответ модели обрезан по лимиту — требуется меньший фрагмент")
+            if reason != "stop":
+                raise LLMError(f"Модель не завершила ответ: {reason}")
+            if not isinstance(content, str) or not content.strip():
+                raise LLMError("Модель вернула пустой ответ")
+            return content
         except httpx.HTTPError as e:
             last = str(e)
             time.sleep(5 * (attempt + 1))

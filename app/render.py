@@ -86,12 +86,15 @@ def task_message(task, meeting) -> str:
 
 def tasks_digest(tasks, meeting) -> str:
     """One message with all tasks of a person from one meeting."""
+    person = tasks[0].assignee if tasks else None
+    name = person.name.split()[0] if person and person.name else ""
+    greeting = f"Здравствуйте{', ' + e(name) if name else ''}! Я SYSAI, помощник по поручениям.\n\n"
     if len(tasks) == 1:
-        return task_message(tasks[0], meeting)
+        return _clip(greeting + task_message(tasks[0], meeting))
     r = meeting.report or {}
     parts = [f"📌 <b>Ваши задачи по итогам совещания</b>", f"«{e(r.get('title') or meeting.title)}»", ""]
     for i, t in enumerate(tasks, 1):
         parts.append(f"{i}. {PRIORITY_ICON.get(t.priority, '')} <b>{e(t.title)}</b> — срок {e(deadlines.fmt(t.deadline))}")
         if t.description:
             parts.append(f"   {e(t.description)}")
-    return _clip("\n".join(parts))
+    return _clip(greeting + "\n".join(parts))

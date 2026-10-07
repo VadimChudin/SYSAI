@@ -12,7 +12,7 @@
     <div class="pane {{ 'on' if source != 'mic' }}" data-pane="file">
       <h2>Запись</h2>
       <label class="drop" id="drop">
-        <input type="file" name="file" accept="audio/*,video/mp4,video/webm,.m4a,.amr,.opus,.oga" id="file" {{ 'required' if source != 'mic' }}>
+        <input type="file" name="file" accept="{{ audio_ext|join(',') }}" data-max-mb="{{ config.MAX_UPLOAD_MB }}" id="file" aria-describedby="upload-error" {{ 'required' if source != 'mic' }}>
         <span class="ic">{{ icon('upload') }}</span>
         <span id="drop-text"><b>Выберите аудиофайл</b> или перетащите сюда<br><small class="muted">mp3, m4a, wav, ogg, webm, flac · до {{ config.MAX_UPLOAD_MB }} МБ</small></span>
       </label>
@@ -20,18 +20,30 @@
         <label class="f">Название <input name="title" placeholder="Определится автоматически"></label>
         <label class="f sm">Дата <input type="date" name="meeting_date" value="{{ today }}"></label>
       </div>
+      <div class="warn small hidden" id="upload-error" role="alert" tabindex="-1" style="margin-top:14px"></div>
       <div class="progress hidden" id="up-progress" style="margin-top:14px"><div></div></div>
       <button class="btn primary wide" id="upload-btn" style="margin-top:16px">Загрузить и обработать</button>
     </div>
     <div class="pane {{ 'on' if source == 'mic' }}" data-pane="mic">
-      <h2>Умный микрофон</h2>
-      <div class="mic-card"><span class="mic-ic {{ 'live' if s.auto_ingest }}">{{ icon('mic') }}</span>
-        <div><b>SYSAI Mic</b> <span class="pill {{ 'green' if s.auto_ingest else 'gray' }}">{{ 'ожидает записи' if s.auto_ingest else 'выключен' }}</span>
-          <div class="small muted">Имитация в MVP: файлы из <code>{{ config.MIC_INBOX_DIR }}</code> подхватываются автоматически.</div></div></div>
-      <label class="toggle"><span class="tx"><b>Автоматически подхватывать записи</b><small>Новые записи с микрофона обрабатываются сами по общим настройкам.</small></span>
-        <input type="checkbox" id="mic-toggle" {{ 'checked' if s.auto_ingest }}><span class="sw"></span></label>
+      <h2>Запись с микрофона</h2>
+      <div class="mic-card"><span class="mic-ic" id="recording-icon">{{ icon('mic') }}</span>
+        <div><b>SYSAI Mic</b> <span class="pill gray" id="recording-state">Готов к записи</span>
+          <div class="small muted" id="recording-progress" role="status" aria-live="polite">Звук передаётся на сервер частями во время записи.</div></div></div>
+      <div class="row" style="margin-top:14px">
+        <label class="f">Название записи <input name="mic_title" placeholder="Совещание с микрофона"></label>
+        <label class="f sm">Дата записи <input type="date" name="mic_date" value="{{ today }}"></label>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button class="btn primary" type="button" id="recording-start">Начать запись</button>
+        <button class="btn" type="button" id="recording-stop" disabled>Остановить и обработать</button>
+        <button class="btn" type="button" id="recording-retry" hidden>Повторить передачу</button>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <a class="btn" id="recording-download" hidden download>Скачать запись</a>
+        <button class="btn danger" type="button" id="recording-cancel" disabled>Отменить запись</button>
+      </div>
+      <p class="small muted">Нужен доступ к микрофону и HTTPS (или localhost). Не закрывайте вкладку до окончания передачи. Расшифровка и задачи появятся после остановки. До {{ config.MAX_UPLOAD_MB }} МБ.</p>
       <p class="small muted">Последние записи с микрофона: {% if mic_meetings %}{% for m in mic_meetings %}<a href="/meetings/{{ m.id }}">{{ m.title or m.filename }}</a>{{ ', ' if not loop.last }}{% endfor %}{% else %}пока нет{% endif %}</p>
-      <button class="btn wide" formaction="/demo" formnovalidate name="source" value="microphone">Имитировать запись с микрофона</button>
     </div>
   </section>
 
@@ -47,4 +59,5 @@
   </section>
 </div>
 </form>
+<script src="/static/recording.js" defer data-max-bytes="{{ config.MAX_UPLOAD_MB * 1024 * 1024 }}"></script>
 {% endblock %}

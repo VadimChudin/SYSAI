@@ -3,7 +3,8 @@ import sys
 import tempfile
 
 _tmp = tempfile.mkdtemp(prefix="sysai_test_")
-os.environ.update(SYSAI_TESTING="1", DATA_DIR=_tmp, DATABASE_URL=f"sqlite:///{_tmp}/test.db",
+os.environ.update(SYSAI_TESTING="1", DATA_DIR=_tmp,
+                  DATABASE_URL=os.getenv("SYSAI_TEST_DATABASE_URL") or f"sqlite:///{_tmp}/test.db",
                   ADMIN_USERNAME="SYSAI", ADMIN_PASSWORD="pw", SECRET_KEY="test-secret", OPENROUTER_API_KEY="", TELEGRAM_BOT_TOKEN="",
                   TELEGRAM_WEBHOOK_SECRET="hook")
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))

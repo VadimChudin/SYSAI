@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bitrix, config, deadlines, pipeline, render, report_archive, settings_store, telegram
+from . import bitrix, config, deadlines, pipeline, progress_board, render, report_archive, settings_store, telegram
 from .analyze import mmss
 from .ui_icons import ICONS
 from .db import ConversationEscalation, Delivery, Employee, Meeting, ReportVersion, SessionLocal, Task, TelegramChat, init_db, now
@@ -311,6 +311,17 @@ def meeting_status(request: Request, mid: int):
                              "dialogue_version": [[x.id, x.status] for x in m.dialogue] +
                                                 [[x.id, x.status] for x in m.escalations] +
                                                 [[x.id, x.status] for x in m.deliveries if x.phase == "dialogue"]})
+
+
+@app.get("/meetings/{mid}/board")
+def meeting_board(request: Request, mid: int):
+    guard(request)
+    with SessionLocal() as s:
+        meeting = s.get(Meeting, mid)
+        if not meeting:
+            raise HTTPException(404, "Совещание не найдено")
+        board = progress_board.build(s, meeting, settings_store.for_meeting(meeting.options), STATUS)
+    return JSONResponse(board, headers={"Cache-Control": "private, no-store"})
 
 
 def _apply_form(mid: int, form, approve=False):

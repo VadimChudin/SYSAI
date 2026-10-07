@@ -14,6 +14,9 @@
   </div>
 </div>
 
+{% if m.report %}{% include '_progress_board.html' %}{% endif %}
+
+<div id="meeting-live-status">
 {% if m.status in ('error','delivery_failed') %}<div class="card err">Ошибка: {{ m.error }}
   {% if m.status == 'error' %}
   <form method="post" action="/meetings/{{ m.id }}/retry-processing" style="margin-top:12px">
@@ -22,9 +25,10 @@
   </form>{% endif %}
 </div>{% endif %}
 {% if m.status in ('queued','transcribing','analyzing','sending','delivery_queued','delivery_retry') %}
-<div class="card center"><div class="spinner"></div><p class="soft">{{ m.progress }}… Страница обновится сама.</p></div>
+<div class="card center"><div class="spinner"></div><p class="soft">{{ m.progress }}… Данные обновятся автоматически.</p></div>
 {% endif %}
 
+</div>
 {% if m.checkpoints %}
 <details class="card" id="processing-checkpoints">
   <summary><b>Сохранённые контрольные точки · {{ m.checkpoints|length }}</b></summary>
@@ -38,6 +42,7 @@
 </details>
 {% endif %}
 
+<div id="delivery-region">
 {% if m.deliveries %}
 <section class="card" id="delivery-journal">
   <div class="row between"><h2>Журнал доставки</h2>
@@ -66,8 +71,10 @@
   </table></div>
 </section>
 {% endif %}
+</div>
 
 {% if m.report %}
+<div id="versions-region">
 {% if m.report_versions %}<section class="card" id="report-versions">
   <h2>Сохранённые версии отчёта</h2>
   <p class="small muted">Это неизменяемые документы. Новые сроки в переписке и изменения оформления не меняют утверждённый PDF.</p>
@@ -79,6 +86,7 @@
       <a class="btn sm" href="/meetings/{{ m.id }}/reports/{{ version.id }}/pdf?download=1">Скачать</a></div>
   </div>{% endfor %}
 </section>{% endif %}
+</div>
 {% set dialogue_version = [] %}
 {% for x in m.dialogue %}{% set _ = dialogue_version.append([x.id,x.status]) %}{% endfor %}
 {% for x in m.escalations %}{% set _ = dialogue_version.append([x.id,x.status]) %}{% endfor %}
@@ -94,7 +102,7 @@
   </div>{% endfor %}
   {% for messages in m.dialogue|groupby('chat_id') %}
   {% set person = employees|selectattr('telegram_chat_id','equalto',messages.grouper)|first %}
-  <details style="margin-top:12px"><summary><b>{{ person.name if person else messages.grouper }}</b> · {{ messages.list|length }} сообщений</summary>
+  <details id="dialogue-{{ messages.grouper }}" style="margin-top:12px"><summary><b>{{ person.name if person else messages.grouper }}</b> · {{ messages.list|length }} сообщений</summary>
     {% for msg in messages.list %}<div class="topic">
       <div class="small muted">{{ 'Сотрудник' if msg.role == 'user' else 'SYSAI' }} · {{ msg.created_at.strftime('%d.%m %H:%M') }} · {{ {'pending':'В очереди','processing':'Обрабатывается','done':'Обработано','sent':'Доставлено','error':'Ошибка'}.get(msg.status,msg.status) }}</div>
       <p style="white-space:pre-wrap">{{ msg.text }}</p>{% if msg.error %}<p class="warn small">{{ msg.error }}</p>{% endif %}
@@ -102,7 +110,7 @@
   </details>
   {% else %}<p class="muted">Ответов сотрудников пока нет.</p>{% endfor %}
 </section>
-<form method="post" action="/meetings/{{ m.id }}/save">
+<form method="post" action="/meetings/{{ m.id }}/save" id="report-editor">
 <fieldset {{ 'disabled' if m.status not in ('awaiting_approval','rejected') }} style="border:0;padding:0;margin:0;min-width:0">
 <section class="card">
   <div class="row between"><h2>Протокол</h2>{% if request.query_params.get('saved') %}<span class="pill green">Сохранено</span>{% endif %}</div>

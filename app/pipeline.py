@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import func
 
-from . import analyze, bitrix, config, deadlines, delivery, render, settings_store, telegram, transcribe
+from . import analyze, bitrix, checkpoints, config, deadlines, delivery, llm, render, settings_store, telegram, transcribe
 from .db import DeadlineRequest, Delivery, Employee, Meeting, SessionLocal, Task, TelegramChat, now
 
 log = logging.getLogger("sysai.pipeline")
@@ -29,6 +29,7 @@ def load(s, meeting_id: int) -> Meeting:
     m = s.get(Meeting, meeting_id)
     _ = [t.assignee for t in m.tasks]  # eager-load for rendering outside the session
     _ = list(m.deliveries)
+    _ = list(m.checkpoints)
     return m
 
 
@@ -73,22 +74,28 @@ def process(meeting_id: int):
         with SessionLocal() as s:
             m = s.get(Meeting, meeting_id)
             audio_path, source, mdate = m.audio_path, m.source, m.meeting_date or deadlines.today()
-            saved = m.transcript if m.status == "analyzing" else None
+            saved = m.transcript
             total = m.duration_sec
+        if source != "demo" and not config.llm_enabled():
+            raise llm.LLMError("Для обработки настоящей записи нужен ключ OpenRouter. Демо запускается отдельно.")
+        checkpoint = checkpoints.Store(meeting_id)
         if saved is not None:
             segments = saved
         else:
             _set(meeting_id, status="transcribing", progress="Расшифровка записи", error="")
-            if source == "demo" or not audio_path:
+            if source == "demo":
                 total, segments = transcribe.mock_transcribe()
             else:
+                if not audio_path or not pathlib.Path(audio_path).is_file():
+                    raise llm.LLMError("Исходное аудио не найдено; загрузите запись заново")
                 total, segments = transcribe.transcribe(audio_path, settings,
-                                                        progress=lambda p: _set(meeting_id, progress=p))
+                                                        progress=lambda p: _set(meeting_id, progress=p), checkpoint=checkpoint)
         _set(meeting_id, transcript=segments, duration_sec=total, status="analyzing",
              progress="Составление отчёта и задач")
         with SessionLocal() as s:
             employees = s.query(Employee).filter(Employee.active.is_(True)).all()
-        report = analyze.analyze(segments, employees, settings, mdate)
+        report = analyze.mock_report(employees, mdate) if source == "demo" else analyze.analyze(
+            segments, employees, settings, mdate, progress=lambda p: _set(meeting_id, progress=p), checkpoint=checkpoint)
         _save_report(meeting_id, report, settings)
         if audio_path and pathlib.Path(audio_path).exists():
             pathlib.Path(audio_path).unlink()  # audio is not kept after processing
@@ -100,6 +107,20 @@ def process(meeting_id: int):
     except Exception as e:  # noqa: BLE001
         log.exception("meeting %s failed", meeting_id)
         _set(meeting_id, status="error", progress="Ошибка", error=str(e)[:2000])
+
+
+def retry_processing(meeting_id):
+    with SessionLocal() as s:
+        m = s.get(Meeting, meeting_id)
+        if not m or m.status != "error" or s.query(Delivery).filter_by(meeting_id=meeting_id, phase="final").first():
+            return False
+        changed = s.query(Meeting).filter_by(id=meeting_id, status="error").update(
+            {Meeting.status: "queued", Meeting.error: "", Meeting.progress: "Возобновление обработки"},
+            synchronize_session=False)
+        s.commit()
+    if changed:
+        submit(meeting_id)
+    return bool(changed)
 
 
 def _save_report(meeting_id: int, report: dict, settings: dict):

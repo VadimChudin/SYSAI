@@ -199,7 +199,7 @@ async def demo(request: Request):
     guard(request)
     form = await request.form()
     mic = form.get("source") == "microphone"
-    mid = pipeline.create_meeting("demo.mp3", "", "microphone" if mic else "demo",
+    mid = pipeline.create_meeting("demo.mp3", "", "demo",
                                   "Запись с микрофона (имитация)" if mic else "", options=_options(form))
     pipeline.submit(mid)
     return RedirectResponse(f"/meetings/{mid}", 303)
@@ -294,6 +294,13 @@ def meeting_retry_delivery(request: Request, mid: int):
     return RedirectResponse(f"/meetings/{mid}", 303)
 
 
+@app.post("/meetings/{mid}/retry-processing")
+def meeting_retry_processing(request: Request, mid: int):
+    guard(request)
+    pipeline.retry_processing(mid)
+    return RedirectResponse(f"/meetings/{mid}", 303)
+
+
 @app.post("/meetings/{mid}/deliveries/{delivery_id}/resend")
 async def meeting_resend_uncertain(request: Request, mid: int, delivery_id: int):
     guard(request)
@@ -337,13 +344,16 @@ def meeting_reanalyze(request: Request, mid: int):
 
     def job():
         try:
-            settings = settings_store.all_settings()
+            settings = pipeline.meeting_settings(mid)
             with SessionLocal() as s:
                 m = s.get(Meeting, mid)
                 emps = s.query(Employee).filter(Employee.active.is_(True)).all()
-                segs, mdate = m.transcript, m.meeting_date or deadlines.today()
+                segs, mdate, source = m.transcript, m.meeting_date or deadlines.today(), m.source
             from . import analyze
-            pipeline._save_report(mid, analyze.analyze(segs, emps, settings, mdate), settings)
+            report = analyze.mock_report(emps, mdate) if source == "demo" else analyze.analyze(
+                segs, emps, settings, mdate, progress=lambda p: pipeline._set(mid, progress=p),
+                checkpoint=pipeline.checkpoints.Store(mid))
+            pipeline._save_report(mid, report, settings)
             pipeline.request_approval(mid)
         except Exception as e:  # noqa: BLE001
             pipeline._set(mid, status="error", error=str(e)[:2000])

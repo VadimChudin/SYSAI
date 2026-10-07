@@ -14,9 +14,28 @@
   </div>
 </div>
 
-{% if m.status in ('error','delivery_failed') %}<div class="card err">Ошибка: {{ m.error }}</div>{% endif %}
+{% if m.status in ('error','delivery_failed') %}<div class="card err">Ошибка: {{ m.error }}
+  {% if m.status == 'error' %}
+  <form method="post" action="/meetings/{{ m.id }}/retry-processing" style="margin-top:12px">
+    <button class="btn">Продолжить обработку</button>
+    <p class="small muted">Успешно обработанные части восстановятся из БД, если запись и параметры не изменились.</p>
+  </form>{% endif %}
+</div>{% endif %}
 {% if m.status in ('queued','transcribing','analyzing','sending','delivery_queued','delivery_retry') %}
 <div class="card center"><div class="spinner"></div><p class="soft">{{ m.progress }}… Страница обновится сама.</p></div>
+{% endif %}
+
+{% if m.checkpoints %}
+<details class="card" id="processing-checkpoints">
+  <summary><b>Сохранённые контрольные точки · {{ m.checkpoints|length }}</b></summary>
+  <p class="small muted">Проверенные результаты сохраняются в БД. При продолжении используются только точки, соответствующие записи и текущим параметрам.</p>
+  <div class="table-wrap"><table><thead><tr><th>Этап</th><th>Часть</th><th>Сохранено</th></tr></thead>
+    <tbody>{% for c in m.checkpoints %}<tr>
+      <td>{{ {'transcribe':'Расшифровка','analysis':'Анализ задач','batch':'Анализ задач','short':'Анализ задач','synthesis':'Итоговый отчёт'}.get(c.stage,c.stage) }}</td>
+      <td>{{ c.part }}</td><td>{{ c.created_at.strftime('%d.%m %H:%M') }}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+</details>
 {% endif %}
 
 {% if m.deliveries %}

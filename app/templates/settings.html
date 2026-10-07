@@ -51,7 +51,8 @@
     <label class="f">Модель расшифровки <input name="transcribe_model" value="{{ s.transcribe_model }}"></label>
     <label class="f">Модель протокола <input name="report_model" value="{{ s.report_model }}"></label>
     <label class="f sm">Фрагмент, минут <input type="number" min="5" max="60" name="chunk_minutes" value="{{ s.chunk_minutes }}"></label>
-    <label class="f">Словарь терминов <small class="muted">имена, продукты, английские слова — пока тестовый</small><textarea name="glossary" rows="3">{{ s.glossary }}</textarea></label>
+    <p class="small muted">Фрагменты перекрываются на 8 секунд. Обрезанные ответы вызывают деление на меньшие части. Некорректный ответ даже на части до 15 секунд останавливает обработку с ошибкой.</p>
+    <label class="f">Словарь терминов <small class="muted">имена, продукты и термины передаются в распознавание и анализ</small><textarea name="glossary" rows="3">{{ s.glossary }}</textarea></label>
   </div>
 </section>
 <section class="card">

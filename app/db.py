@@ -73,6 +73,7 @@ class Meeting(Base):
     sent_at = Column(DateTime(timezone=True), nullable=True)
     tasks = relationship("Task", back_populates="meeting", cascade="all, delete-orphan", order_by="Task.id")
     deliveries = relationship("Delivery", cascade="all, delete-orphan", order_by="Delivery.id")
+    checkpoints = relationship("ProcessingCheckpoint", cascade="all, delete-orphan")
 
 
 class Task(Base):
@@ -104,6 +105,18 @@ class DeadlineRequest(Base):
     asked_at = Column(DateTime(timezone=True), default=now)
     resolved = Column(Boolean, default=False)
     task = relationship("Task")
+
+
+class ProcessingCheckpoint(Base):
+    __tablename__ = "processing_checkpoints"
+    __table_args__ = (UniqueConstraint("meeting_id", "stage", "part", "fingerprint"),)
+    id = Column(Integer, primary_key=True)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False, index=True)
+    stage = Column(String(30), nullable=False)
+    part = Column(String(100), nullable=False)
+    fingerprint = Column(String(64), nullable=False)
+    data = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=now)
 
 
 class Delivery(Base):

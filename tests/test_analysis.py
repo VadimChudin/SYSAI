@@ -138,26 +138,29 @@ def test_large_transcript_keeps_tasks_deduplicates_only_exact_overlap_and_caches
 
 
 @pytest.mark.parametrize("bad_task", [
-    {"title": "Задача", "description": "", "employee_id": None, "assignee_name": None,
-     "deadline": None, "deadline_quote": None, "priority": "medium", "time": "00:01"},
+    task("Задача", "", "00:01"),
     task("Задача", "не из записи", "00:01"),
     task("Задача", "Анна подготовит план.", "99:99:99"),
 ])
-def test_invalid_task_evidence_or_time_fails(monkeypatch, bad_task):
+def test_invalid_task_evidence_or_time_becomes_review_draft(monkeypatch, bad_task):
     segments = [segment(0, "Анна подготовит план.")]
-    setup_llm(monkeypatch, lambda _: empty_report(tasks=[bad_task]))
-
-    with pytest.raises(llm.LLMError):
-        analyze.analyze(segments, EMPLOYEES, {"report_model": "test"}, MEETING_DATE)
+    calls = setup_llm(monkeypatch, lambda _: empty_report(tasks=[bad_task]))
+    result = analyze.analyze(segments, EMPLOYEES, {"report_model": "test"}, MEETING_DATE)
+    assert len(calls) == 2
+    assert result["requires_review"] is True
+    assert result["tasks"] == []
+    assert result["notes"][0].startswith("Требует проверки: Задача")
+    assert "цитата:" in result["notes"][0] and "причина:" in result["notes"][0]
 
 
 def test_task_quote_must_match_the_reported_time(monkeypatch):
     segments = [segment(0, "Анна подготовит план."), segment(30, "Борис проверит оплату.")]
     wrong_time = task("Подготовить план", "Анна подготовит план.", "00:30", 1)
-    setup_llm(monkeypatch, lambda _: empty_report(tasks=[wrong_time]))
-
-    with pytest.raises(llm.LLMError, match="время"):
-        analyze.analyze(segments, EMPLOYEES, {"report_model": "test"}, MEETING_DATE)
+    calls = setup_llm(monkeypatch, lambda _: empty_report(tasks=[wrong_time]))
+    result = analyze.analyze(segments, EMPLOYEES, {"report_model": "test"}, MEETING_DATE)
+    assert len(calls) == 2
+    assert result["requires_review"] is True and result["tasks"] == []
+    assert "время" in result["notes"][0]
 
 
 def test_task_quote_can_span_adjacent_segments_with_normalized_whitespace():
@@ -185,16 +188,19 @@ def test_relative_deadline_uses_meeting_date_base():
     ("2026-10-16", "к пятнице"),
     ("2026-10-09", ""),
     ("2026-10-09", "к понедельнику"),
+    ("неизвестный срок", "к пятнице"),
 ])
 def test_live_deadline_requires_transcript_quote_and_matches_recognized_date(monkeypatch, deadline,
                                                                             deadline_quote):
     quote = "Анна отправит отчет к пятнице."
     task_data = task("Отправить отчет", quote, "00:00")
     task_data.update(deadline=deadline, deadline_quote=deadline_quote)
-    setup_llm(monkeypatch, lambda _: empty_report(tasks=[task_data]))
-
-    with pytest.raises(llm.LLMError):
-        analyze.analyze([segment(0, quote)], EMPLOYEES, {"report_model": "test"}, MEETING_DATE)
+    calls = setup_llm(monkeypatch, lambda _: empty_report(tasks=[task_data]))
+    result = analyze.analyze([segment(0, quote)], EMPLOYEES, {"report_model": "test"}, MEETING_DATE)
+    assert len(calls) == 2
+    assert result["requires_review"] is True and result["tasks"] == []
+    assert result["notes"][0].startswith("Требует проверки: Отправить отчет")
+    assert "причина:" in result["notes"][0]
 
 
 def test_live_deadline_quote_is_verified_and_relative_date_uses_meeting_date(monkeypatch):
@@ -289,12 +295,134 @@ def test_invalid_quote_retries_once_and_saves_only_verified_report(monkeypatch):
     assert len(checkpoint.values) == 1
 
 
-def test_invalid_quote_retry_is_bounded_and_not_checkpointed(monkeypatch):
+def test_invalid_quote_retry_is_bounded_and_review_draft_is_checkpointed(monkeypatch):
     calls = setup_llm(monkeypatch, lambda _: empty_report(tasks=[
         task("Подготовить план", "Несуществующая цитата.", "00:00")]))
     checkpoint = Checkpoint()
-    with pytest.raises(llm.LLMError, match="Цитата задачи отсутствует"):
-        analyze.analyze([segment(0, "Анна подготовит план.")], EMPLOYEES,
-                        {"report_model": "test"}, MEETING_DATE, checkpoint=checkpoint)
+    segments = [segment(0, "Анна подготовит план.")]
+    result = analyze.analyze(segments, EMPLOYEES, {"report_model": "test"}, MEETING_DATE,
+                             checkpoint=checkpoint)
+    assert len(calls) == 2
+    assert result["requires_review"] is True and result["tasks"] == []
+    assert "Несуществующая цитата." in result["notes"][0]
+    assert "Цитата задачи отсутствует" in result["notes"][0]
+    assert len(checkpoint.values) == 1
+    again = analyze.analyze(segments, EMPLOYEES, {"report_model": "test"}, MEETING_DATE,
+                            checkpoint=checkpoint)
+    assert again == result and len(calls) == 2
+
+
+@pytest.mark.parametrize(("name", "employee_id"), [(None, None), ("Ольга", None), ("Ольга", 999)])
+def test_verified_task_without_employee_preserves_heard_name(monkeypatch, name, employee_id):
+    spoken = "Подготовить план." if name is None else "Ольга подготовит план."
+    proposed = task("Подготовить план", spoken, "00:00", employee_id)
+    proposed["assignee_name"] = name
+    calls = setup_llm(monkeypatch, lambda _: empty_report(tasks=[proposed]))
+    report = analyze.analyze([segment(0, spoken)], [], {"report_model": "test"}, MEETING_DATE)
+    assert len(calls) == 1
+    assert report["requires_review"] is False
+    assert report["tasks"][0]["employee_id"] is None
+    assert report["tasks"][0]["assignee_name"] == (name or "")
+
+
+def test_fallback_preserves_verified_tasks_metadata_and_all_review_notes(monkeypatch):
+    spoken = "Ольга подготовит план к пятнице."
+    good = task("Подготовить план", spoken, "00:00", None)
+    good["assignee_name"] = "Ольга"
+    bad_quote = {**good, "title": "Спорная задача", "quote": "Ольга отправит бюджет."}
+    bad_time = {**good, "title": "Спорное время", "time": "00:50"}
+    bad_deadline = {**good, "title": "Спорный срок", "deadline": "2026-10-16",
+                    "deadline_quote": "к пятнице"}
+    candidate = empty_report(tasks=[good, bad_quote, bad_time, bad_deadline],
+                             notes=["Исходное примечание"], open_questions=["Кто проверит план?"],
+                             decisions=[{"text": "Продолжить работу", "time": "00:00"}])
+    calls = setup_llm(monkeypatch, lambda _: candidate)
+    report = analyze.analyze([segment(0, spoken)], [], {"report_model": "test"}, MEETING_DATE)
+    assert len(calls) == 2
+    assert report["requires_review"] is True
+    assert [t["title"] for t in report["tasks"]] == ["Подготовить план"]
+    assert report["tasks"][0]["assignee_name"] == "Ольга"
+    assert report["notes"][0] == "Исходное примечание"
+    assert len(report["notes"]) == 4
+    assert all(note.startswith("Требует проверки:") and "Ольга" in note and "причина:" in note
+               for note in report["notes"][1:])
+    assert bad_quote["quote"] in report["notes"][1]
+    assert report["decisions"] == candidate["decisions"]
+    assert report["open_questions"] == candidate["open_questions"]
+    assert candidate["tasks"] == [good, bad_quote, bad_time, bad_deadline]  # no in-place quarantine
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("title", []), ("summary", None), ("next_meeting", 123), ("participants", ""),
+    ("topics", [{"title": "План", "summary": "", "time": "00:00", "notes": 1}]),
+    ("decisions", [{"text": "Решение", "time": 1}]), ("open_questions", [None]),
+    ("risks", {}), ("notes", [123]), ("requires_review", "false"),
+])
+def test_draft_fallback_never_softens_metadata_schema_errors(monkeypatch, key, value):
+    bad = task("Неподтвержденная задача", "Несуществующая цитата", "00:00")
+    valid_schema = empty_report(tasks=[bad])
+    malformed = empty_report(tasks=[bad], **{key: value})
+    responses = iter([valid_schema, malformed])
+    calls = setup_llm(monkeypatch, lambda _: next(responses))
+    checkpoint = Checkpoint()
+    with pytest.raises(llm.LLMError):
+        analyze.analyze([segment(0, "Обычное обсуждение.")], EMPLOYEES, {"report_model": "test"},
+                        MEETING_DATE, checkpoint=checkpoint)
     assert len(calls) == 2
     assert not checkpoint.values
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("quote", None), ("time", 1), ("employee_id", True), ("assignee_name", []),
+    ("deadline", []), ("deadline_quote", 1), ("priority", "urgent"),
+])
+def test_task_schema_errors_remain_fatal_even_after_an_evidence_error(monkeypatch, key, value):
+    bad = task("Спорная задача", "Несуществующая цитата", "00:00")
+    malformed = {**bad, key: value}
+    calls = setup_llm(monkeypatch, lambda _: empty_report(tasks=[bad, malformed]))
+    with pytest.raises(llm.LLMError):
+        analyze.analyze([segment(0, "Обычное обсуждение.")], EMPLOYEES, {"report_model": "test"}, MEETING_DATE)
+    assert len(calls) == 1
+
+
+def test_missing_task_quote_field_remains_a_schema_error(monkeypatch):
+    malformed = task("План", "Цитата", "00:00")
+    del malformed["quote"]
+    calls = setup_llm(monkeypatch, lambda _: empty_report(tasks=[malformed]))
+    with pytest.raises(llm.LLMError, match="tasks.quote"):
+        analyze.analyze([segment(0, "Цитата")], [], {"report_model": "test"}, MEETING_DATE)
+    assert len(calls) == 1
+
+
+def test_long_batches_and_cached_resume_preserve_requires_review(monkeypatch):
+    monkeypatch.setattr(analyze, "MAX_BATCH_CHARS", 100)
+    monkeypatch.setattr(analyze, "OVERLAP_REPLIES", 0)
+    spoken = "Ольга подготовит план."
+    segments = [segment(0, spoken), segment(1, "Обсуждение: " + "данные " * 20),
+                segment(2, "Завершили обсуждение: " + "итоги " * 20)]
+    checkpoint = Checkpoint()
+    good = task("Подготовить план", spoken, "00:00", None)
+    good["assignee_name"] = "Ольга"
+    bad = {**good, "title": "Спорная задача", "quote": "Несуществующая цитата"}
+
+    def respond(messages):
+        user = messages[-1]["content"]
+        if "Ты синтезируешь" in messages[0]["content"]:
+            # Synthesis cannot clear review or reintroduce quarantined tasks.
+            return empty_report(title="Итоги", tasks=[bad], requires_review=False)
+        if spoken in user:
+            return empty_report(tasks=[good, bad])
+        return empty_report()
+
+    calls = setup_llm(monkeypatch, respond)
+    report = analyze.analyze(segments, [], {"report_model": "test"}, MEETING_DATE, checkpoint=checkpoint)
+    assert report["title"] == "Итоги"
+    assert report["requires_review"] is True
+    assert [t["title"] for t in report["tasks"]] == ["Подготовить план"]
+    assert report["tasks"][0]["assignee_name"] == "Ольга"
+    assert len(report["notes"]) == 1 and "Спорная задача" in report["notes"][0]
+    before = len(calls)
+    assert before == len(analyze._transcript_batches(segments)) + 2  # one retry and synthesis
+    again = analyze.analyze(segments, [], {"report_model": "test"}, MEETING_DATE, checkpoint=checkpoint)
+    assert again == report
+    assert len(calls) == before

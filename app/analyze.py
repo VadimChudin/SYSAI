@@ -114,20 +114,22 @@ def _request_report(model, system, transcript):
     return llm.parse_json(text)
 
 
+class TaskValidationError(llm.LLMError):
+    """Task evidence is unsafe; report/task schema errors remain fatal."""
+
+
 def _request_verified_report(model, system, input_transcript, employees, transcript,
                              duration, meeting_date, segments, progress=None):
-    """Retry evidence errors once, never accept an unverified task."""
+    """Retry task validation once, then quarantine unsafe tasks as review notes."""
     retry_prompt = system
     for attempt in range(2):
         candidate = _request_report(model, retry_prompt, input_transcript)
         try:
             return _validate_report(candidate, employees, transcript, duration,
-                                    meeting_date, source_segments=segments)
-        except llm.LLMError as exc:
-            if attempt or str(exc) not in (
-                "Цитата задачи отсутствует в расшифровке",
-                "Цитата задачи не соответствует указанному времени",
-            ):
+                                    meeting_date, source_segments=segments,
+                                    quarantine_tasks=bool(attempt))
+        except TaskValidationError:
+            if attempt:
                 raise
             if progress:
                 progress("Проверяю цитаты задач: повторный анализ")
@@ -200,9 +202,12 @@ def _quote_matches_at_time(quote, seconds, segments):
     return False
 
 
-def _validate_report(report, employees, transcript, duration, meeting_date, require_tasks=True, source_segments=None):
+def _validate_report(report, employees, transcript, duration, meeting_date, require_tasks=True,
+                     source_segments=None, quarantine_tasks=False):
     if not isinstance(report, dict):
         raise llm.LLMError("Модель вернула JSON не в виде объекта")
+    if "requires_review" in report and not isinstance(report["requires_review"], bool):
+        raise llm.LLMError("Некорректный тип поля requires_review")
     for key in ("title", "summary"):
         _strict_text(report.get(key), key)
     _strict_text(report.get("next_meeting"), "next_meeting", optional=True)
@@ -235,12 +240,13 @@ def _validate_report(report, employees, transcript, duration, meeting_date, requ
     tasks = report.get("tasks", []) if require_tasks else []
     if require_tasks:
         tasks = _strict_list(report, "tasks", dict)
-    canonical_transcript = _evidence_text(transcript)
+    # Validate EVERY task schema before softening evidence errors. A malformed
+    # later task must not be hidden by an earlier task requiring review.
     for task in tasks:
         for key in ("title", "description", "time", "quote"):
             _strict_text(task.get(key), f"tasks.{key}")
-        if not task["title"].strip() or not task["quote"].strip():
-            raise llm.LLMError("Задаче не хватает названия или цитаты-основания")
+        if not task["title"].strip():
+            raise llm.LLMError("Задаче не хватает названия")
         if not isinstance(task.get("assignee_name"), (str, type(None))):
             raise llm.LLMError("Некорректный assignee_name задачи")
         eid = task.get("employee_id")
@@ -251,26 +257,48 @@ def _validate_report(report, employees, transcript, duration, meeting_date, requ
                 raise llm.LLMError(f"Некорректный тип поля tasks.{key}")
         if task.get("priority") not in ("high", "medium", "low"):
             raise llm.LLMError("Некорректный приоритет задачи")
-        seconds = _time_seconds(task["time"])
-        if seconds is None or seconds > duration:
-            raise llm.LLMError("У задачи некорректное время в записи")
-        if _evidence_text(task["quote"]) not in canonical_transcript:
-            raise llm.LLMError("Цитата задачи отсутствует в расшифровке")
-        if not _quote_matches_at_time(task["quote"], seconds, source_segments or []):
-            raise llm.LLMError("Цитата задачи не подтверждает указанное время в записи")
-        if task["deadline"]:
-            deadline = normalize_deadline(task["deadline"], meeting_date)
-            if deadline is None:
-                raise llm.LLMError("Не удалось проверить срок задачи")
-            quote = task.get("deadline_quote")
-            if not isinstance(quote, str) or not quote.strip():
-                raise llm.LLMError("Для указанного срока нет цитаты-основания")
-            if _evidence_text(quote) not in canonical_transcript:
-                raise llm.LLMError("Цитата срока отсутствует в расшифровке")
-            quoted_deadline = deadlines.parse(quote, base=meeting_date)
-            if quoted_deadline is not None and quoted_deadline != deadline:
-                raise llm.LLMError("Дата задачи не соответствует процитированному сроку")
+    verified, review_notes = [], []
+    canonical_transcript = _evidence_text(transcript)
+    for task in tasks:
+        try:
+            _validate_task_evidence(task, canonical_transcript, duration, meeting_date, source_segments)
+        except TaskValidationError as exc:
+            if not quarantine_tasks:
+                raise
+            name = (task.get("assignee_name") or "").strip() or "не назначен"
+            review_notes.append(
+                f"Требует проверки: {task['title']}; исполнитель: {name}; "
+                f"цитата: «{task['quote']}»; время: {task['time']}; причина: {exc}"
+            )
+        else:
+            verified.append(task)
+    if review_notes:
+        report = dict(report, tasks=verified, notes=[*notes, *review_notes], requires_review=True)
     return report
+
+
+def _validate_task_evidence(task, canonical_transcript, duration, meeting_date, source_segments):
+    if not task["quote"].strip():
+        raise TaskValidationError("Задаче не хватает цитаты-основания")
+    seconds = _time_seconds(task["time"])
+    if seconds is None or seconds > duration:
+        raise TaskValidationError("У задачи некорректное время в записи")
+    if _evidence_text(task["quote"]) not in canonical_transcript:
+        raise TaskValidationError("Цитата задачи отсутствует в расшифровке")
+    if not _quote_matches_at_time(task["quote"], seconds, source_segments or []):
+        raise TaskValidationError("Цитата задачи не подтверждает указанное время в записи")
+    if task["deadline"]:
+        deadline = normalize_deadline(task["deadline"], meeting_date)
+        if deadline is None:
+            raise TaskValidationError("Не удалось проверить срок задачи")
+        quote = task.get("deadline_quote")
+        if not isinstance(quote, str) or not quote.strip():
+            raise TaskValidationError("Для указанного срока нет цитаты-основания")
+        if _evidence_text(quote) not in canonical_transcript:
+            raise TaskValidationError("Цитата срока отсутствует в расшифровке")
+        quoted_deadline = deadlines.parse(quote, base=meeting_date)
+        if quoted_deadline is not None and quoted_deadline != deadline:
+            raise TaskValidationError("Дата задачи не соответствует процитированному сроку")
 
 
 def normalize_deadline(value, meeting_date=None):
@@ -399,6 +427,7 @@ def analyze(segments: list, employees, settings: dict, meeting_date: dt.date, pr
                            meeting_date, progress)
     combined = dict(metadata)
     combined.update(_merge_metadata(reports))
+    combined["requires_review"] = any(report.get("requires_review", False) for report in reports)
     combined["tasks"] = _deduplicate_tasks([task for report in reports for task in report["tasks"]], employees)
     return normalize(combined, employees, meeting_date)
 
@@ -438,6 +467,7 @@ def normalize(r: dict, employees, meeting_date=None) -> dict:
     out["title"] = (r.get("title") or "Совещание").strip()
     out["summary"] = (r.get("summary") or "").strip()
     out["next_meeting"] = r.get("next_meeting")
+    out["requires_review"] = bool(r.get("requires_review", False))
     tasks = []
     for t in out["tasks"]:
         if not isinstance(t, dict) or not t.get("title"):

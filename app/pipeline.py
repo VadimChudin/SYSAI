@@ -68,7 +68,11 @@ def create_meeting(filename: str, audio_path: str = "", source: str = "web", tit
 
 def meeting_settings(meeting_id: int) -> dict:
     with SessionLocal() as s:
-        return settings_store.for_meeting(s.get(Meeting, meeting_id).options)
+        m = s.get(Meeting, meeting_id)
+        settings = settings_store.for_meeting(m.options)
+        if (m.report or {}).get("requires_review"):
+            settings["approval_required"] = True
+        return settings
 
 
 _PROCESSING_LOCK = threading.Lock()
@@ -134,7 +138,19 @@ def _process(meeting_id: int):
         _set(meeting_id, status="error", progress="Ошибка", error=str(e)[:2000])
 
 
+def _force_review_options(m):
+    """Persist the safety override, including reports recovered after a crash."""
+    if (m.report or {}).get("requires_review"):
+        m.options = dict(m.options or {}, approval_required=True)
+        return True
+    return False
+
+
 def _finish_processing(meeting_id, audio_path, settings):
+    with SessionLocal() as s:
+        if _force_review_options(s.get(Meeting, meeting_id)):
+            settings = dict(settings, approval_required=True)
+        s.commit()
     # Originals remain on DATA_DIR's persistent disk until the report is committed.
     # Missing/undeletable originals after that point do not invalidate a saved report.
     if audio_path:
@@ -168,6 +184,7 @@ def _save_report(meeting_id: int, report: dict, settings: dict):
     with SessionLocal() as s:
         m = s.get(Meeting, meeting_id)
         m.report = report
+        _force_review_options(m)
         m.title = m.title or report.get("title", "")
         m.tasks.clear()
         for t in report.get("tasks", []):
@@ -217,7 +234,28 @@ def request_approval(meeting_id: int):
     delivery.flush(meeting_id, "draft")
 
 
+def _hold_unapproved_review(meeting_id):
+    """Do not resume final sends for a review draft without human approval."""
+    with SessionLocal() as s:
+        m = s.get(Meeting, meeting_id)
+        if not m or not (m.report or {}).get("requires_review") or m.approved_at:
+            return False
+        if m.status not in ("queued", "transcribing", "analyzing", "awaiting_approval", "rejected",
+                            "delivery_queued", "sending", "delivery_failed", "delivery_retry"):
+            return False
+        _force_review_options(m)
+        already_held = m.status in ("awaiting_approval", "rejected")
+        if not already_held:
+            m.status = "analyzing"
+        s.commit()
+    if not already_held:
+        request_approval(meeting_id)
+    return True
+
+
 def deliver(meeting_id: int):
+    if _hold_unapproved_review(meeting_id):
+        return
     with SessionLocal() as s:
         claimed = s.query(Meeting).filter_by(id=meeting_id, status="delivery_queued").update(
             {Meeting.status: "sending", Meeting.progress: "Отправка"}, synchronize_session=False)
@@ -459,6 +497,9 @@ def _handle_callback(cb: dict, settings: dict):
 
 
 def submit_deliver(meeting_id: int, allowed=("awaiting_approval", "rejected"), revision=None):
+    # Only a transition explicitly originating in review is human approval.
+    if not {"awaiting_approval", "rejected"}.intersection(allowed) and _hold_unapproved_review(meeting_id):
+        return False
     with SessionLocal() as s:
         values = {Meeting.status: "delivery_queued", Meeting.error: ""}
         if "awaiting_approval" in allowed or "analyzing" in allowed:
@@ -528,6 +569,8 @@ def retry_due_deliveries():
 def resume_jobs():
     delivery.recover()
     with SessionLocal() as s:
+        for m in s.query(Meeting).filter(Meeting.report.is_not(None)):
+            _force_review_options(m)
         s.query(Meeting).filter_by(status="sending").update({Meeting.status: "delivery_queued"}, synchronize_session=False)
         s.commit()
         processing = []

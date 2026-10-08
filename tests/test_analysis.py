@@ -250,3 +250,22 @@ def test_normalize_nulls_unknown_participant_employee_id():
     result = analyze.normalize({"participants": [{"speaker": "Спикер 1", "name": "Неизвестный",
                                                    "employee_id": 999, "role": "участник"}]}, EMPLOYEES)
     assert result["participants"][0]["employee_id"] is None
+
+
+@pytest.mark.parametrize("identity", [{"name": None, "role": None}, {}, {"name": "", "role": ""}])
+def test_unknown_participant_identity_does_not_abort_report(monkeypatch, identity):
+    participant = {"speaker": "Спикер 1", "employee_id": None, **identity}
+    setup_llm(monkeypatch, lambda messages: empty_report(participants=[participant]))
+    report = analyze.analyze([segment(0, "Обсудили ход работ.")], EMPLOYEES,
+                             {"report_model": "test"}, MEETING_DATE)
+    assert report["participants"][0]["name"] == ""
+    assert report["participants"][0]["role"] == ""
+    assert report["participants"][0]["employee_id"] is None
+
+
+@pytest.mark.parametrize("bad_name", [123, [], {"name": "Анна"}, True])
+def test_participant_identity_wrong_types_are_still_rejected(bad_name):
+    report = empty_report(participants=[{"speaker": "Спикер 1", "name": bad_name,
+                                         "role": "", "employee_id": None}])
+    with pytest.raises(llm.LLMError, match="participants.name"):
+        analyze._validate_report(report, EMPLOYEES, "Обсудили ход работ.", 5, MEETING_DATE)

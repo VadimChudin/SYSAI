@@ -24,6 +24,7 @@ SYSTEM = """Ты — опытный секретарь руководителя.
 - Участники: сопоставь метки говорящих («Спикер 1») с людьми, если это понятно из разговора.
 Справочник сотрудников (JSON): {employees}
 Термины компании: {glossary}
+Если имя или роль участника неизвестны, укажи пустую строку; не выдумывай имя по голосу.
 Верни ТОЛЬКО JSON по схеме:
 {{"title": str, "summary": str (4-8 предложений), "participants": [{{"speaker": str, "name": str, "employee_id": int|null, "role": str}}],
  "topics": [{{"title": str, "summary": str, "notes": [str], "time": "MM:SS"}}],
@@ -187,8 +188,13 @@ def _validate_report(report, employees, transcript, duration, meeting_date, requ
     risks = _strict_list(report, "risks", str)
     notes = _strict_list(report, "notes", str)
     for item in participants:
-        for key in ("speaker", "name", "role"):
-            _strict_text(item.get(key), f"participants.{key}")
+        _strict_text(item.get("speaker"), "participants.speaker")
+        # An unidentified voice is normal: models may omit its name/role
+        # or return JSON null. Preserve the speaker label, never invent a name.
+        for key in ("name", "role"):
+            if item.get(key) is None:
+                item[key] = ""
+            _strict_text(item[key], f"participants.{key}")
         if item.get("employee_id") is not None and (not isinstance(item["employee_id"], int)
                                                        or isinstance(item["employee_id"], bool)):
             raise llm.LLMError("Некорректный employee_id участника")

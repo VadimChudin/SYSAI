@@ -269,3 +269,32 @@ def test_participant_identity_wrong_types_are_still_rejected(bad_name):
                                          "role": "", "employee_id": None}])
     with pytest.raises(llm.LLMError, match="participants.name"):
         analyze._validate_report(report, EMPLOYEES, "Обсудили ход работ.", 5, MEETING_DATE)
+
+
+def test_invalid_quote_retries_once_and_saves_only_verified_report(monkeypatch):
+    spoken = "Анна подготовит план."
+    responses = iter([
+        empty_report(tasks=[task("Подготовить план", "Анна должна составить план.", "00:00")]),
+        empty_report(tasks=[task("Подготовить план", spoken, "00:00")]),
+    ])
+    calls = setup_llm(monkeypatch, lambda _: next(responses))
+    checkpoint = Checkpoint()
+    progress = []
+    result = analyze.analyze([segment(0, spoken)], EMPLOYEES, {"report_model": "test"},
+                             MEETING_DATE, checkpoint=checkpoint, progress=progress.append)
+    assert len(calls) == 2
+    assert result["tasks"][0]["quote"] == spoken
+    assert "ДОСЛОВНО" in calls[1][0]["content"]
+    assert any("повторный" in message for message in progress)
+    assert len(checkpoint.values) == 1
+
+
+def test_invalid_quote_retry_is_bounded_and_not_checkpointed(monkeypatch):
+    calls = setup_llm(monkeypatch, lambda _: empty_report(tasks=[
+        task("Подготовить план", "Несуществующая цитата.", "00:00")]))
+    checkpoint = Checkpoint()
+    with pytest.raises(llm.LLMError, match="Цитата задачи отсутствует"):
+        analyze.analyze([segment(0, "Анна подготовит план.")], EMPLOYEES,
+                        {"report_model": "test"}, MEETING_DATE, checkpoint=checkpoint)
+    assert len(calls) == 2
+    assert not checkpoint.values

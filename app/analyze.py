@@ -114,6 +114,31 @@ def _request_report(model, system, transcript):
     return llm.parse_json(text)
 
 
+def _request_verified_report(model, system, input_transcript, employees, transcript,
+                             duration, meeting_date, segments, progress=None):
+    """Retry evidence errors once, never accept an unverified task."""
+    retry_prompt = system
+    for attempt in range(2):
+        candidate = _request_report(model, retry_prompt, input_transcript)
+        try:
+            return _validate_report(candidate, employees, transcript, duration,
+                                    meeting_date, source_segments=segments)
+        except llm.LLMError as exc:
+            if attempt or str(exc) not in (
+                "Цитата задачи отсутствует в расшифровке",
+                "Цитата задачи не соответствует указанному времени",
+            ):
+                raise
+            if progress:
+                progress("Проверяю цитаты задач: повторный анализ")
+            retry_prompt = system + (
+                "\nПредыдущий ответ не прошёл проверку цитат. Сформируй отчёт заново. "
+                "В tasks.quote копируй непрерывный фрагмент расшифровки ДОСЛОВНО, "
+                "без пересказа, многоточий или исправления слов. Укажи время исходной реплики. "
+                "Не создавай задачу без подтверждения в тексте."
+            )
+
+
 def _strict_text(value, label, optional=False):
     if optional and value is None:
         return
@@ -349,8 +374,8 @@ def analyze(segments: list, employees, settings: dict, meeting_date: dt.date, pr
                 pass
         if progress:
             progress("Анализ расшифровки")
-        report = _validate_report(_request_report(settings["report_model"], system, transcript), employees,
-                                  transcript, duration, meeting_date, source_segments=segments)
+        report = _request_verified_report(settings["report_model"], system, transcript, employees,
+                                          transcript, duration, meeting_date, segments, progress)
         _checkpoint_put(checkpoint, "short", 0, fingerprint, report)
         return normalize(report, employees, meeting_date)
 
@@ -365,8 +390,8 @@ def analyze(segments: list, employees, settings: dict, meeting_date: dt.date, pr
         if report is None:
             if progress:
                 progress(f"Анализ части {index + 1} из {len(batches)}")
-            report = _validate_report(_request_report(settings["report_model"], system, batch), employees,
-                                      transcript, duration, meeting_date, source_segments=segments)
+            report = _request_verified_report(settings["report_model"], system, batch, employees,
+                                              transcript, duration, meeting_date, segments, progress)
             _checkpoint_put(checkpoint, "batch", index, fingerprint, report)
         reports.append(report)
 

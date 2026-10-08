@@ -302,3 +302,12 @@ ul { margin: 4px 0; padding-left: 20px; } li { margin: 4px 0; } li::marker { col
 @media (prefers-reduced-motion: reduce) {
   .progress-board-motion-dot { display: none; }
 }
+
+.setup { display: flex; flex-direction: column; gap: 16px; max-width: 760px; }
+.setup-step h2 { margin: 0; }
+.setup-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+.setup-head .small { margin: 2px 0 0; }
+.step-n { width: 28px; height: 28px; border-radius: 50%; background: var(--clay); color: #121210; display: grid; place-items: center; font-weight: 650; flex: none; }
+details.more { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+details.more summary { cursor: pointer; color: var(--soft); }
+button.linkish { background: none; border: 0; color: var(--clay); padding: 0; cursor: pointer; font: inherit; }

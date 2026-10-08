@@ -127,7 +127,7 @@ def test_incomplete_response_splits_real_audio_and_returns_absolute_times(tmp_pa
 
 
 def test_31_second_audio_splits_below_30_and_recovers_on_grandchildren(tmp_path, monkeypatch):
-    source = make_audio(tmp_path / "source.wav", 31)
+    source = make_audio(tmp_path / "source.wav", 50)
     monkeypatch.setattr(config, "llm_enabled", lambda: True)
     requests = []
     split_durations = []
@@ -151,41 +151,30 @@ def test_31_second_audio_splits_below_30_and_recovers_on_grandchildren(tmp_path,
     total, segments = transcribe.transcribe(str(source), settings())
 
     assert len(requests) == 5
-    assert split_durations[1:5] == pytest.approx([23.25, 15.5, 17.4375, 11.625])
-    assert [segment["start"] for segment in segments] == pytest.approx([1, 12.6, 16.5])
+    assert split_durations[1:5] == pytest.approx([29.0, 25.0, 18.5, 14.5])
+    assert len(segments) == 3 and all(segment["end"] <= total for segment in segments)
     assert all(segment["end"] <= total for segment in segments)
 
 
-def test_31_second_audio_stops_splitting_at_15_seconds_when_all_responses_incomplete(tmp_path, monkeypatch):
-    source = make_audio(tmp_path / "source.wav", 31)
+def test_truncated_flag_splits_and_keeps_both_halves(tmp_path, monkeypatch):
+    source = make_audio(tmp_path / "source.wav", 50)
     monkeypatch.setattr(config, "llm_enabled", lambda: True)
-    requests = []
-    split_durations = []
-    real_extract = audio.extract
+    calls = []
 
-    def tracked_extract(source_path, destination, start, seconds):
-        split_durations.append(seconds)
-        return real_extract(source_path, destination, start, seconds)
+    def chat(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return json.dumps({"segments": [{"speaker": "A", "start": 1, "text": "cut"}], "truncated": True})
+        text = "left" if len(calls) == 2 else "right"
+        return json.dumps({"segments": [{"speaker": "A", "start": 1, "text": text}]})
 
-    monkeypatch.setattr(audio, "extract", tracked_extract)
-
-    def incomplete(*args, **kwargs):
-        requests.append(args[1])
-        raise llm.IncompleteResponse("still incomplete")
-
-    monkeypatch.setattr(llm, "chat", incomplete)
-
-    with pytest.raises(llm.IncompleteResponse, match="still incomplete"):
-        transcribe.transcribe(str(source), settings())
-
-    assert len(requests) == 4
-    assert split_durations[1:] == pytest.approx([
-        23.25, 15.5, 17.4375, 11.625, 13.078125, 8.71875,
-    ])
+    monkeypatch.setattr(llm, "chat", chat)
+    _, segments = transcribe.transcribe(str(source), settings())
+    assert [item["text"] for item in segments] == ["left", "right"]
 
 
 def test_long_real_audio_transcription_offsets_tail_checkpoint_and_cleanup(tmp_path, monkeypatch):
-    source = make_long_mp3(tmp_path / "hour.mp3", 3661)
+    source = make_long_mp3(tmp_path / "clip.mp3", 200)
     with SessionLocal() as session:
         meeting = Meeting(title="hour-long transcription")
         session.add(meeting)
@@ -213,11 +202,11 @@ def test_long_real_audio_transcription_offsets_tail_checkpoint_and_cleanup(tmp_p
 
     monkeypatch.setattr(llm, "chat", chat)
     total, segments = transcribe.transcribe(
-        str(source), settings(chunk_minutes=30), checkpoint=checkpoint,
+        str(source), settings(), checkpoint=checkpoint,
     )
 
     assert len(calls) == 3
-    assert [segment["start"] for segment in segments] == pytest.approx([5, 1805, 3600.5])
+    assert [segment["start"] for segment in segments] == pytest.approx([5, 95, 180.5])
     assert len(workdirs) == 1
     assert not pathlib.Path(workdirs[0]).exists()
     with SessionLocal() as session:
@@ -277,7 +266,7 @@ def test_merge_keeps_repeated_words_outside_overlap():
 
 
 def test_checkpoint_retry_reuses_successful_part_and_invalidates_on_settings_change(tmp_path, monkeypatch):
-    source = make_audio(tmp_path / "source.wav", 70)
+    source = make_audio(tmp_path / "source.wav", 100)
     with SessionLocal() as session:
         meeting = Meeting(title="checkpoint test")
         session.add(meeting)

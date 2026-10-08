@@ -601,7 +601,7 @@ async def settings_save(request: Request):
         "conversation_tone": (f.get("conversation_tone") or settings_store.DEFAULTS["conversation_tone"]).strip()[:1000],
         "allow_deadline_proposals": bool(f.get("allow_deadline_proposals")),
         "secretary_chat_ids": _chat_ids(f, "secretary_chat_ids"),
-        "chunk_minutes": max(5, min(60, int(f.get("chunk_minutes") or 30))),
+        "chunk_minutes": 2,
         "glossary": f.get("glossary", ""),
         "company_name": f.get("company_name", "").strip() or "Компания",
         "accent_color": f.get("accent_color", "#2563eb"),

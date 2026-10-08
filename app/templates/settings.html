@@ -1,63 +1,97 @@
-{% extends "base.html" %}{% from "_ui.html" import toggle, deadline_modes, chat_picker %}{% block title %}Настройки — SYSAI{% endblock %}
+{% extends "base.html" %}{% from "_ui.html" import toggle, deadline_modes, chat_picker %}
+{% block title %}Настройки — SYSAI{% endblock %}
+{% macro switch(name, title, hint='') %}
+<input type="hidden" name="present_{{ name }}" value="1">
+{{ toggle(name, s[name], title, hint) }}
+{% endmacro %}
+{% macro recipients(name) %}
+<input type="hidden" name="present_{{ name }}" value="1">
+{{ chat_picker(name, s[name], chats) }}
+{% endmacro %}
+{% macro credential(name, title, placeholder) %}
+<label class="f">{{ title }} <input type="password" name="{{ name }}" placeholder="{{ placeholder }}" autocomplete="new-password"></label>
+<p class="small muted">{% if masked[name] %}Сохранён в приложении.{% elif env[name] %}Задан на сервере.{% else %}Пока не задан.{% endif %} Текущее значение не показывается.</p>
+<label class="f">Что сделать с ключом
+  <select name="action_{{ name }}">
+    <option value="keep">Не менять</option>
+    <option value="replace">Сохранить введённый ключ</option>
+    <option value="clear">Удалить ключ из приложения</option>
+  </select>
+</label>
+<p class="small muted">Для нового ключа выберите «Сохранить введённый ключ». Удаление не меняет ключ, заданный на сервере.</p>
+{% endmacro %}
 {% block body %}
-<div class="page-h"><div><h1>Настройки</h1><p>Три шага: ключ, куда слать отчёт, как ставить сроки.</p></div></div>
-{% if msg %}<div class="card note">{{ msg }}</div>{% endif %}
-<form method="post" action="/settings" class="setup">
+<div class="page-h"><div><h1>Настройки</h1><p>Добавьте ключ и выберите, нужно ли проверять отчёт. Остальное можно оставить как есть.</p></div></div>
+{% if msg %}<div class="card note" role="status">{{ msg }}</div>{% endif %}
+<form method="post" action="/settings" class="setup simple-settings">
   <section class="card setup-step">
-    <div class="setup-head"><span class="step-n">1</span><div><h2>Ключ OpenRouter</h2><p class="small muted">Без него запись не расшифруется. Telegram и Bitrix — по желанию, ниже.</p></div>
-      {% if masked.openrouter_api_key %}<span class="pill green">ключ есть</span>{% elif env.openrouter_api_key %}<span class="pill blue">из окружения</span>{% else %}<span class="pill gray">нужен ключ</span>{% endif %}
+    <h2>Ключ OpenRouter</h2>
+    <p class="small muted">Нужен для распознавания записи и подготовки отчёта. Telegram и Bitrix24 не обязательны.</p>
+    {{ credential('openrouter_api_key', 'Ключ OpenRouter', 'sk-or-v1-…') }}
+    {% if masked.openrouter_api_key or env.openrouter_api_key %}
+    <button type="submit" class="btn sm" formaction="/settings/test-openrouter" formnovalidate>Проверить ключ</button>
+    <p class="small muted">Проверяется уже сохранённый ключ, не введённый в поле. Сначала сохраните новый ключ, затем проверьте его.</p>
+    {% endif %}
+  </section>
+  <section class="card setup-step">
+    <h2>Как обрабатывать совещания</h2>
+    {{ switch('approval_required', 'Сначала показать черновик', 'Включено: проверьте отчёт перед отправкой. Выключено: отправка выбранным получателям начнётся сразу после обработки.') }}
+    <p class="small muted">Отчёт всегда доступен на сайте. Если получатели не выбраны, отправлять его в Telegram некуда.</p>
+  </section>
+  <details class="card settings-more">
+    <summary>Telegram и получатели отчёта <span class="small muted">Необязательно</span></summary>
+    <div class="settings-content">
+      <p class="small muted">Подключайте, только если хотите получать отчёты или задачи в Telegram. Для работы на сайте бот не нужен.</p>
+      {{ credential('telegram_bot_token', 'Токен Telegram-бота', 'Токен от BotFather') }}
+      <h3>Кому отправлять полный отчёт</h3>
+      <p class="small muted">Выберите чаты или укажите их номера. Чтобы чат появился в списке, напишите боту /start или добавьте бота в группу.</p>
+      {{ recipients('report_chat_ids') }}
+      {{ switch('send_tasks_to_assignees', 'Отправлять исполнителям их задачи', 'Каждому — только его задачи. Для этого сотрудник должен привязать свой Telegram.') }}
+      <h3>Кто проверяет черновик</h3>
+      <p class="small muted">Эти чаты получают черновик, когда включена проверка. Без них можно проверить отчёт на сайте.</p>
+      {{ recipients('approver_chat_ids') }}
+      <h3>Кому передавать сложные вопросы</h3>
+      <p class="small muted">Секретарь получает вопросы, на которые бот не смог ответить. Можно оставить пустым.</p>
+      {{ recipients('secretary_chat_ids') }}
+      <h3>Диалоги с сотрудниками</h3>
+      {{ switch('dialogue_enabled', 'Отвечать сотрудникам по их задачам', 'Бот сможет обсуждать задачи с сотрудниками в Telegram.') }}
     </div>
-    <label class="f">Ключ <input type="password" name="openrouter_api_key" placeholder="sk-or-v1-…" autocomplete="off"></label>
-    <div class="row center">{% if masked.openrouter_api_key or env.openrouter_api_key %}<button class="btn sm" formaction="/settings/test-openrouter">Проверить ключ</button>{% endif %}
-      {% if masked.openrouter_api_key %}<label class="small muted"><input type="checkbox" name="clear_openrouter_api_key"> удалить ключ</label>{% endif %}</div>
-    <details class="more">
-      <summary>Telegram и Bitrix</summary>
-      <div class="stack" style="margin-top:12px">
-        <label class="f">Токен Telegram-бота <input type="password" name="telegram_bot_token" placeholder="от @BotFather" autocomplete="off"></label>
-        <div class="row center">{% if masked.telegram_bot_token or env.telegram_bot_token %}<button class="btn sm" formaction="/settings/test-telegram">Проверить бота</button>{% endif %}
-          {% if masked.telegram_bot_token %}<label class="small muted"><input type="checkbox" name="clear_telegram_bot_token"> удалить</label>{% endif %}</div>
-        <label class="f">Вебхук Bitrix24 <input type="password" name="bitrix_webhook_url" placeholder="https://портал.bitrix24.by/rest/…" autocomplete="off"></label>
-        {% if masked.bitrix_webhook_url %}<label class="small muted"><input type="checkbox" name="clear_bitrix_webhook_url"> удалить вебхук</label>{% endif %}
-        {{ toggle('bitrix_enabled', s.bitrix_enabled, 'Создавать задачи в Bitrix24', 'Только если вебхук уже вставлен.', disabled=not bitrix_url) }}
-      </div>
-    </details>
-  </section>
-
-  <section class="card setup-step">
-    <div class="setup-head"><span class="step-n">2</span><div><h2>Куда отправлять</h2><p class="small muted">Полный отчёт уходит выбранным чатам. Исполнителям — только их задачи.</p></div></div>
-    {{ chat_picker('report_chat_ids', s.report_chat_ids, chats) }}
-    {{ toggle('send_tasks_to_assignees', s.send_tasks_to_assignees, 'Писать каждому его задачи', 'В личку, если Telegram привязан') }}
-    {{ toggle('approval_required', s.approval_required, 'Сначала показать черновик', 'Выключите, чтобы отчёт ушёл сразу') }}
-    <details class="more">
-      <summary>Кто проверяет и кто секретарь</summary>
-      <h3>Проверяющие</h3>{{ chat_picker('approver_chat_ids', s.approver_chat_ids, chats) }}
-      <h3>Секретарь для сложных вопросов</h3>{{ chat_picker('secretary_chat_ids', s.secretary_chat_ids, chats) }}
-      {{ toggle('include_transcript_in_pdf', s.include_transcript_in_pdf, 'Полная расшифровка в конце PDF') }}
-      {{ toggle('dialogue_enabled', s.dialogue_enabled, 'Отвечать сотрудникам по их задачам') }}
-    </details>
-  </section>
-
-  <section class="card setup-step">
-    <div class="setup-head"><span class="step-n">3</span><div><h2>Сроки задач</h2><p class="small muted">Названный на совещании срок важнее. Если срока нет — действует выбранный режим.</p></div></div>
-    {{ deadline_modes(s.deadline_mode) }}
-    <div class="row" style="margin-top:14px">
-      <label class="f sm">Если срок не назван, рабочих дней <input type="number" min="1" name="default_deadline_days" value="{{ s.default_deadline_days }}"></label>
+  </details>
+  <details class="card settings-more">
+    <summary>Сроки задач <span class="small muted">Необязательно</span></summary>
+    <div class="settings-content">
+      <p class="small muted">Срок, названный на совещании, важнее. Этот режим нужен только для задач без названного срока. «Уточнять» требует подключённого Telegram.</p>
+      {{ deadline_modes(s.deadline_mode) }}
+      <label class="f">Срок по умолчанию, рабочих дней <input type="number" min="1" step="1" name="default_deadline_days" value="{{ s.default_deadline_days }}"></label>
+      <label class="f">Сколько часов ждать ответа о сроке <input type="number" min="1" step="any" name="ask_timeout_hours" value="{{ s.ask_timeout_hours }}"></label>
+      <p class="small muted">Только для режима «Уточнять». Если ответа нет, используется срок по умолчанию.</p>
+      {{ switch('allow_deadline_proposals', 'Разрешать сотрудникам предлагать новый срок', 'Предложение не означает автоматическое согласование.') }}
     </div>
-  </section>
-
-  <input type="hidden" name="transcribe_model" value="{{ s.transcribe_model }}">
-  <input type="hidden" name="report_model" value="{{ s.report_model }}">
-  <input type="hidden" name="conversation_model" value="{{ s.conversation_model }}">
-  <input type="hidden" name="conversation_tone" value="{{ s.conversation_tone }}">
-  <input type="hidden" name="glossary" value="{{ s.glossary }}">
-  <input type="hidden" name="company_name" value="{{ s.company_name }}">
-  <input type="hidden" name="accent_color" value="{{ s.accent_color }}">
-  <input type="hidden" name="chunk_minutes" value="2">
-  <input type="hidden" name="ask_timeout_hours" value="{{ s.ask_timeout_hours }}">
-  {% if s.auto_ingest %}<input type="hidden" name="auto_ingest" value="1">{% endif %}
-  {% if s.allow_deadline_proposals %}<input type="hidden" name="allow_deadline_proposals" value="1">{% endif %}
-
-  <div class="row sticky center"><button class="btn primary">Сохранить</button></div>
+  </details>
+  <details class="card settings-more">
+    <summary>Bitrix24 <span class="small muted">Необязательно</span></summary>
+    <div class="settings-content">
+      <p class="small muted">Нужен только для создания задач в вашей CRM. Если CRM не используете, не заполняйте этот раздел.</p>
+      {{ credential('bitrix_webhook_url', 'Вебхук Bitrix24', 'Адрес входящего вебхука Bitrix24') }}
+      {{ switch('bitrix_enabled', 'Создавать задачи в Bitrix24', 'Для отправки нужен действующий вебхук. Можно сохранить вебхук и включить отправку одновременно.') }}
+    </div>
+  </details>
+  <details class="card settings-more">
+    <summary>Оформление и дополнительные параметры <span class="small muted">Для опытных пользователей</span></summary>
+    <div class="settings-content">
+      <p class="small muted">Обычно менять не нужно. Платные модели OpenRouter могут расходовать баланс вашего ключа.</p>
+      {{ switch('include_transcript_in_pdf', 'Добавлять полную расшифровку в PDF', 'PDF станет длиннее. Без этого в нём остаётся отчёт.') }}
+      <label class="f">Название компании в отчёте <input name="company_name" value="{{ s.company_name }}"></label>
+      <label class="f">Цвет оформления <input type="color" name="accent_color" value="{{ s.accent_color }}"></label>
+      <label class="f">Названия и термины для распознавания <textarea name="glossary" rows="3">{{ s.glossary }}</textarea></label>
+      <label class="f">Модель распознавания <input name="transcribe_model" value="{{ s.transcribe_model }}"></label>
+      <label class="f">Модель подготовки отчёта <input name="report_model" value="{{ s.report_model }}"></label>
+      <label class="f">Бесплатная модель переписки <input name="conversation_model" value="{{ s.conversation_model }}"></label>
+      <p class="small muted">Допустимы openrouter/free или название модели с окончанием :free.</p>
+      <label class="f">Стиль ответов сотрудникам <textarea name="conversation_tone" rows="3" maxlength="1000">{{ s.conversation_tone }}</textarea></label>
+    </div>
+  </details>
+  <div class="row sticky center"><button type="submit" class="btn primary">Сохранить настройки</button></div>
 </form>
-{% if ephemeral %}<p class="small muted">База сейчас временная: без Postgres ключи и совещания сбросятся при перезапуске.</p>{% endif %}
+{% if ephemeral %}<p class="small muted">База сейчас временная: без Postgres ключи и совещания могут сброситься при перезапуске.</p>{% endif %}
 {% endblock %}

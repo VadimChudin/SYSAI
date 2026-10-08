@@ -561,7 +561,7 @@ def known_chats():
 def settings_view(request: Request, msg: str = ""):
     guard(request)
     st = settings_store.all_settings()
-    masked = {k: settings_store.mask(st.get(k)) for k in settings_store.SECRET_KEYS}
+    masked = {k: bool(st.get(k)) for k in settings_store.SECRET_KEYS}
     env = {"openrouter_api_key": bool(config.OPENROUTER_API_KEY), "telegram_bot_token": bool(config.TELEGRAM_BOT_TOKEN),
            "bitrix_webhook_url": bool(config.BITRIX_WEBHOOK_URL)}
     for k in settings_store.SECRET_KEYS:
@@ -581,42 +581,57 @@ def _chat_ids(form, name: str) -> list[str]:
 async def settings_save(request: Request):
     guard(request)
     f = await request.form()
-    conversation_model = f.get("conversation_model", "").strip() or settings_store.DEFAULTS["conversation_model"]
-    if conversation_model != "openrouter/free" and not conversation_model.endswith(":free"):
-        raise HTTPException(400, "Для переписки выберите openrouter/free или модель с суффиксом :free")
-    settings_store.set_many({
-        "auto_ingest": bool(f.get("auto_ingest")),
-        "approval_required": bool(f.get("approval_required")),
-        "approver_chat_ids": _chat_ids(f, "approver_chat_ids"),
-        "report_chat_ids": _chat_ids(f, "report_chat_ids"),
-        "send_tasks_to_assignees": bool(f.get("send_tasks_to_assignees")),
-        "include_transcript_in_pdf": bool(f.get("include_transcript_in_pdf")),
-        "deadline_mode": f.get("deadline_mode", "default"),
-        "default_deadline_days": max(1, int(f.get("default_deadline_days") or 3)),
-        "ask_timeout_hours": _num(f.get("ask_timeout_hours"), 24),
-        "transcribe_model": f.get("transcribe_model", "").strip() or settings_store.DEFAULTS["transcribe_model"],
-        "report_model": f.get("report_model", "").strip() or settings_store.DEFAULTS["report_model"],
-        "conversation_model": conversation_model,
-        "dialogue_enabled": bool(f.get("dialogue_enabled")),
-        "conversation_tone": (f.get("conversation_tone") or settings_store.DEFAULTS["conversation_tone"]).strip()[:1000],
-        "allow_deadline_proposals": bool(f.get("allow_deadline_proposals")),
-        "secretary_chat_ids": _chat_ids(f, "secretary_chat_ids"),
-        "chunk_minutes": 2,
-        "glossary": f.get("glossary", ""),
-        "company_name": f.get("company_name", "").strip() or "Компания",
-        "accent_color": f.get("accent_color", "#2563eb"),
-        "bitrix_enabled": bool(f.get("bitrix_enabled")),
-    })
+    # Only update submitted controls. Omitted settings belong to other sections
+    # or clients and must not be reset to defaults. Presence markers distinguish
+    # an unchecked checkbox / empty chat selection from an omitted control.
+    updates = {}
+    for k in ("auto_ingest", "approval_required", "send_tasks_to_assignees",
+              "include_transcript_in_pdf", "dialogue_enabled", "allow_deadline_proposals",
+              "bitrix_enabled"):
+        if k in f or f.get("present_" + k) == "1":
+            updates[k] = bool(f.get(k))
+    for k in ("approver_chat_ids", "report_chat_ids", "secretary_chat_ids"):
+        if k in f or k + "_extra" in f or f.get("present_" + k) == "1":
+            updates[k] = _chat_ids(f, k)
+    for k in ("transcribe_model", "report_model", "conversation_model", "conversation_tone",
+              "company_name", "accent_color", "glossary"):
+        if k in f:
+            value = str(f[k]).strip()
+            updates[k] = value if k == "glossary" else value or settings_store.DEFAULTS[k]
+    if "conversation_tone" in updates:
+        updates["conversation_tone"] = updates["conversation_tone"][:1000]
+    if "conversation_model" in updates:
+        model = updates["conversation_model"]
+        if model != "openrouter/free" and not model.endswith(":free"):
+            raise HTTPException(400, "Для переписки выберите openrouter/free или модель с суффиксом :free")
+    if "deadline_mode" in f:
+        if f["deadline_mode"] not in ("default", "ask", "none"):
+            raise HTTPException(400, "Выберите режим сроков из списка")
+        updates["deadline_mode"] = f["deadline_mode"]
+    if "default_deadline_days" in f:
+        try:
+            updates["default_deadline_days"] = max(1, int(f["default_deadline_days"]))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Укажите целое число рабочих дней")
+    if "ask_timeout_hours" in f:
+        updates["ask_timeout_hours"] = _num(f["ask_timeout_hours"], 24)
+    # Secrets are never echoed in hidden inputs. A value alone (including a
+    # legacy hidden value) is not an instruction to replace a credential.
+    # Require the explicit action selected in the visible credential control.
     old_token = config.telegram_token()
-    secrets_upd = {}
     for k in settings_store.SECRET_KEYS:
-        v = (f.get(k) or "").strip()
-        if f.get("clear_" + k):
-            secrets_upd[k] = ""
-        elif v:
-            secrets_upd[k] = v
-    if secrets_upd:
-        settings_store.set_many(secrets_upd)
+        action = f.get("action_" + k, "keep")
+        if action == "clear":
+            updates[k] = ""
+        elif action == "replace":
+            value = str(f.get(k) or "").strip()
+            if not value:
+                raise HTTPException(400, "Введите новый ключ или выберите «Не менять»")
+            updates[k] = value
+        elif action != "keep":
+            raise HTTPException(400, "Неизвестное действие с ключом")
+    if updates:
+        settings_store.set_many(updates)
     msg = "Сохранено"
     if config.telegram_token() != old_token and config.telegram_enabled() and not config.TESTING:
         try:

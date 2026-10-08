@@ -1,14 +1,8 @@
-{% extends "base.html" %}{% from "_icons.html" import icon %}
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% from "_ui.html" import toggle, deadline_modes, chat_picker %}
 {% block title %}Новое совещание — SYSAI{% endblock %}
 {% block body %}
 <div class="page-h"><div><h1>Новое совещание</h1><p>Загрузите запись или говорите в микрофон. Отчёт и задачи соберутся сами.</p></div></div>
 <form method="post" action="/upload" enctype="multipart/form-data" id="upload-form" class="setup">
-<input type="hidden" name="approval_required" value="{{ '1' if s.approval_required else '' }}">
-<input type="hidden" name="send_tasks_to_assignees" value="{{ '1' if s.send_tasks_to_assignees else '' }}">
-<input type="hidden" name="include_transcript_in_pdf" value="{{ '1' if s.include_transcript_in_pdf else '' }}">
-<input type="hidden" name="deadline_mode" value="{{ s.deadline_mode }}">
-{% for cid in s.report_chat_ids %}<input type="hidden" name="report_chat_ids" value="{{ cid }}">{% endfor %}
-
 <section class="card setup-step">
   <div class="seg-switch" id="src-switch">
     <label><input type="radio" name="src" value="file" {{ 'checked' if source != 'mic' }}>{{ icon('upload') }} Файл</label>
@@ -46,6 +40,18 @@
       <a class="btn" id="recording-download" hidden download>Скачать запись</a>
     </div>
   </div>
+  <details class="more meeting-options">
+    <summary>Параметры только этого совещания (необязательно)</summary>
+    <p class="small muted">Обычно ничего менять не нужно: здесь выбраны ваши общие настройки. Изменения действуют только для этой записи и не меняют настройки приложения.</p>
+    {{ toggle('approval_required', s.approval_required, 'Проверить черновик перед отправкой', 'Если выключить, отчёт отправится выбранным получателям сразу после обработки.') }}
+    {{ toggle('send_tasks_to_assignees', s.send_tasks_to_assignees, 'Отправить исполнителям их задачи', 'Нужны подключённый Telegram и привязанные сотрудники.') }}
+    {{ toggle('include_transcript_in_pdf', s.include_transcript_in_pdf, 'Добавить полную расшифровку в PDF') }}
+    <h3>Сроки, если на встрече их не назвали</h3>
+    {{ deadline_modes(s.deadline_mode) }}
+    <h3>Получатели полного отчёта</h3>
+    {{ chat_picker('report_chat_ids', s.report_chat_ids, chats) }}
+    <p class="small muted">Без получателей отчёт останется доступен на сайте.</p>
+  </details>
   <p class="small muted" style="margin-bottom:0">Сроки и получатели берутся из <a href="/settings">настроек</a>. <button class="linkish" formaction="/demo" formnovalidate name="source" value="demo">Показать демо без аудио</button></p>
 </section>
 </form>

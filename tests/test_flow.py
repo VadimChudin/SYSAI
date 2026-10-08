@@ -200,16 +200,17 @@ def test_login_landing_and_per_meeting_options(tg):
 def test_api_keys_pasted_in_panel_are_used_and_masked(client):
     from app import config
     assert not config.llm_enabled()
-    client.post("/settings", data={"deadline_mode": "default", "openrouter_api_key": "sk-or-v1-secretvalue1234",
+    client.post("/settings", data={"deadline_mode": "default", "action_openrouter_api_key": "replace",
+                                   "action_telegram_bot_token": "replace", "openrouter_api_key": "sk-or-v1-secretvalue1234",
                                    "telegram_bot_token": "123:ABCDEFtoken9876"})
     assert config.openrouter_key() == "sk-or-v1-secretvalue1234" and config.llm_enabled()
     assert config.telegram_token() == "123:ABCDEFtoken9876"
     page = client.get("/settings").text
-    assert "secretvalue" not in page and "ABCDEFtoken" not in page and "1234" in page
+    assert "secretvalue" not in page and "ABCDEFtoken" not in page
     # saving other settings with empty key fields keeps the keys
     client.post("/settings", data={"deadline_mode": "ask"})
     assert config.openrouter_key() == "sk-or-v1-secretvalue1234"
-    client.post("/settings", data={"deadline_mode": "ask", "clear_openrouter_api_key": "on", "clear_telegram_bot_token": "on"})
+    client.post("/settings", data={"deadline_mode": "ask", "action_openrouter_api_key": "clear", "action_telegram_bot_token": "clear"})
     assert not config.llm_enabled() and not config.telegram_token()
 
 

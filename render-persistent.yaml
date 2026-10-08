@@ -1,0 +1,44 @@
+# PAID persistence configuration; applying this Blueprint provisions billable resources.
+# Free web services have ephemeral storage; free Postgres expires after 30 days.
+# This file is configuration only: review costs before deploying it.
+databases:
+  - name: sysai-db
+    databaseName: sysai
+    user: sysai
+    plan: 0.1c-256mb
+    diskSizeGB: 5
+
+services:
+  - type: web
+    name: sysai
+    runtime: docker
+    plan: starter
+    numInstances: 1
+    healthCheckPath: /health
+    disk:
+      name: sysai-audio
+      mountPath: /var/data
+      sizeGB: 10
+    envVars:
+      - key: ADMIN_USERNAME
+        value: SYSAI
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_MODE
+        value: webhook
+      - key: TIMEZONE
+        value: Europe/Minsk
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: DATA_DIR
+        value: /var/data
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sysai-db
+          property: connectionString

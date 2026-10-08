@@ -311,3 +311,20 @@ ul { margin: 4px 0; padding-left: 20px; } li { margin: 4px 0; } li::marker { col
 details.more { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
 details.more summary { cursor: pointer; color: var(--soft); }
 button.linkish { background: none; border: 0; color: var(--clay); padding: 0; cursor: pointer; font: inherit; }
+
+/* Simple settings: primary controls first, optional sections closed by default. */
+.simple-settings .setup-step > h2 { margin-bottom: 10px; }
+.settings-more > summary { cursor: pointer; font-weight: 650; line-height: 1.5; }
+.settings-more > summary .small { display: block; margin-left: 18px; font-weight: 400; }
+.settings-more > summary:focus-visible,
+.meeting-options > summary:focus-visible { outline: 2px solid var(--clay); outline-offset: 5px; border-radius: 3px; }
+.settings-content { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+.settings-content .f { margin-top: 12px; }
+.simple-settings input:not([type="checkbox"]):not([type="radio"]),
+.simple-settings select, .simple-settings textarea { max-width: 100%; min-width: 0; }
+.simple-settings .setup-head { flex-wrap: wrap; }
+.meeting-options .f { margin-top: 12px; }
+@media (max-width: 600px) {
+  .simple-settings .radio-cards, .meeting-options .radio-cards { grid-template-columns: 1fr; }
+  .simple-settings .sticky .btn { width: 100%; }
+}

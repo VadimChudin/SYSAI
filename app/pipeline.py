@@ -71,14 +71,42 @@ def meeting_settings(meeting_id: int) -> dict:
         return settings_store.for_meeting(s.get(Meeting, meeting_id).options)
 
 
+_PROCESSING_LOCK = threading.Lock()
+_PROCESSING = set()
+
+
 def process(meeting_id: int):
-    settings = meeting_settings(meeting_id)
+    # One application process is required (also for startup outbox recovery).
+    # Repeated submissions within that process must not run the same stages twice.
+    with _PROCESSING_LOCK:
+        if meeting_id in _PROCESSING:
+            return
+        _PROCESSING.add(meeting_id)
+    try:
+        _process(meeting_id)
+    finally:
+        with _PROCESSING_LOCK:
+            _PROCESSING.discard(meeting_id)
+
+
+def _process(meeting_id: int):
     try:
         with SessionLocal() as s:
             m = s.get(Meeting, meeting_id)
+            if not m or m.status not in ("queued", "transcribing", "analyzing"):
+                return  # Late/duplicate submissions must not re-open delivered meetings.
+            if s.query(Delivery).filter_by(meeting_id=meeting_id, phase="final").first():
+                return  # Never rebuild tasks or re-plan an existing final outbox.
             audio_path, source, mdate = m.audio_path, m.source, m.meeting_date or deadlines.today()
             saved = m.transcript
+            saved_report = m.report
             total = m.duration_sec
+        settings = meeting_settings(meeting_id)
+        if saved_report is not None:
+            # Crash after _save_report committed: tasks and their IDs are already durable.
+            _set(meeting_id, status="analyzing", error="")
+            _finish_processing(meeting_id, audio_path, settings)
+            return
         if source != "demo" and not config.llm_enabled():
             raise llm.LLMError("Для обработки настоящей записи нужен ключ OpenRouter. Демо запускается отдельно.")
         checkpoint = checkpoints.Store(meeting_id)
@@ -100,16 +128,26 @@ def process(meeting_id: int):
         report = analyze.mock_report(employees, mdate) if source == "demo" else analyze.analyze(
             segments, employees, settings, mdate, progress=lambda p: _set(meeting_id, progress=p), checkpoint=checkpoint)
         _save_report(meeting_id, report, settings)
-        if audio_path and pathlib.Path(audio_path).exists():
-            pathlib.Path(audio_path).unlink()  # audio is not kept after processing
-            _set(meeting_id, audio_path="")
-        if settings["approval_required"]:
-            request_approval(meeting_id)
-        else:
-            submit_deliver(meeting_id, allowed=("analyzing",))
+        _finish_processing(meeting_id, audio_path, settings)
     except Exception as e:  # noqa: BLE001
         log.exception("meeting %s failed", meeting_id)
         _set(meeting_id, status="error", progress="Ошибка", error=str(e)[:2000])
+
+
+def _finish_processing(meeting_id, audio_path, settings):
+    # Originals remain on DATA_DIR's persistent disk until the report is committed.
+    # Missing/undeletable originals after that point do not invalidate a saved report.
+    if audio_path:
+        try:
+            pathlib.Path(audio_path).unlink(missing_ok=True)
+        except OSError:
+            log.warning("Cannot remove processed audio for meeting %s", meeting_id)
+        else:
+            _set(meeting_id, audio_path="")
+    if settings["approval_required"]:
+        request_approval(meeting_id)
+    else:
+        submit_deliver(meeting_id, allowed=("analyzing",))
 
 
 def retry_processing(meeting_id):
@@ -492,10 +530,20 @@ def resume_jobs():
     with SessionLocal() as s:
         s.query(Meeting).filter_by(status="sending").update({Meeting.status: "delivery_queued"}, synchronize_session=False)
         s.commit()
-        processing = [m.id for m in s.query(Meeting).filter(Meeting.status.in_(("queued", "transcribing", "analyzing")))]
+        processing = []
+        for m in s.query(Meeting).filter(Meeting.status.in_(("queued", "transcribing", "analyzing"))):
+            if s.query(Delivery).filter_by(meeting_id=m.id, phase="final").first():
+                # Existing final rows are authoritative, including sent/uncertain rows.
+                m.status = "delivery_queued"
+            elif s.query(Delivery).filter_by(meeting_id=m.id, phase="draft").first():
+                m.status = "awaiting_approval"
+            else:
+                processing.append(m.id)
+        s.commit()
         sending = [m.id for m in s.query(Meeting).filter_by(status="delivery_queued")]
         legacy_drafts = [m.id for m in s.query(Meeting).filter_by(status="awaiting_approval")
-                         if "approval_revision" not in (m.options or {})]
+                         if "approval_revision" not in (m.options or {})
+                         and not s.query(Delivery).filter_by(meeting_id=m.id, phase="draft").first()]
     for mid in processing:
         submit(mid)
     for mid in sending:
